@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_P12_DIR="/Users/broliang/Library/Mobile Documents/com~apple~CloudDocs/keys/apple_developer"
+DEFAULT_P12_DIR="$HOME/Library/Mobile Documents/com~apple~CloudDocs/keys/apple_developer"
 KEYCHAIN="${KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
 P12_PATH="${1:-}"
 
