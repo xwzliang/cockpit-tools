@@ -3994,7 +3994,7 @@ function MainApp() {
       </Suspense>
 
       <div className="main-wrapper">
-        {topRightAdVisible && visibleTopCenterPromoAds.length > 0 ? (
+        {page !== 'dashboard' && topRightAdVisible && visibleTopCenterPromoAds.length > 0 ? (
           <div className="app-global-promo-layer" aria-hidden={false}>
             <TopCenterPromoBanner ads={visibleTopCenterPromoAds} reserveWhenEmpty={false} />
           </div>

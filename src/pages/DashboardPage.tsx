@@ -130,6 +130,19 @@ interface DashboardPageProps {
   onEasterEggTriggerClick: () => void;
 }
 
+const APIKEY_FUN_KEYS_STORAGE_KEY = 'apikey_fun_managed_keys';
+
+function readManagedApiRelayCount(): number {
+  try {
+    const raw = window.localStorage.getItem(APIKEY_FUN_KEYS_STORAGE_KEY);
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 const DASHBOARD_DEFERRED_PREFETCH_DELAY_MS = 6000;
 const DASHBOARD_DEFERRED_PREFETCH_BATCH_SIZE = 1;
 const DASHBOARD_DEFERRED_PREFETCH_BATCH_DELAY_MS = 1200;
@@ -362,8 +375,30 @@ export function DashboardPage({
     setHiddenEntry,
   } = usePlatformLayoutStore();
   const apiRelayEntryEnabled = useSponsorStore((state) => Boolean(state.state.sponsorModule));
+  const [apiRelayManagedKeyCount, setApiRelayManagedKeyCount] = React.useState(readManagedApiRelayCount);
   const remoteHiddenPlatformIds = useRemoteConfigStore((state) => state.hiddenPlatformIds);
-  const apiRelayDashboardEnabled = apiRelayEntryEnabled && apiRelayDashboardVisible;
+  const apiRelayDashboardEnabled =
+    apiRelayEntryEnabled && apiRelayDashboardVisible && apiRelayManagedKeyCount > 0;
+
+  React.useEffect(() => {
+    const refreshApiRelayCount = () => {
+      setApiRelayManagedKeyCount(readManagedApiRelayCount());
+    };
+    const handleManagedKeysUpdated = (event: Event) => {
+      const count = (event as CustomEvent<{ count?: number }>).detail?.count;
+      if (typeof count === 'number' && Number.isFinite(count)) {
+        setApiRelayManagedKeyCount(Math.max(0, Math.trunc(count)));
+        return;
+      }
+      refreshApiRelayCount();
+    };
+    window.addEventListener('storage', refreshApiRelayCount);
+    window.addEventListener('apikey-fun-managed-keys-updated', handleManagedKeysUpdated);
+    return () => {
+      window.removeEventListener('storage', refreshApiRelayCount);
+      window.removeEventListener('apikey-fun-managed-keys-updated', handleManagedKeysUpdated);
+    };
+  }, []);
   const hiddenEntrySet = useMemo(() => new Set(hiddenEntryIds), [hiddenEntryIds]);
   const remoteHiddenPlatformSet = useMemo(
     () => new Set(remoteHiddenPlatformIds),
@@ -3330,7 +3365,7 @@ export function DashboardPage({
                 </div>
                 <div className="stat-info">
                   <span className="stat-label">{t('nav.apiRelay', '中转站')}</span>
-                  <span className="stat-value">1</span>
+                  <span className="stat-value">{apiRelayManagedKeyCount}</span>
                 </div>
               </button>
             );
