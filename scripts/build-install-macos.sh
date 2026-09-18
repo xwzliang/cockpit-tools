@@ -4,7 +4,7 @@ set -euo pipefail
 APP_NAME="Cockpit Tools"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
-SIGN_IDENTITY="${SIGN_IDENTITY:--}"
+SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 SKIP_INSTALL="${SKIP_INSTALL:-0}"
 
 log() {
@@ -16,9 +16,46 @@ die() {
   exit 1
 }
 
+detect_signing_identity() {
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    printf '%s\n' "$SIGN_IDENTITY"
+    return
+  fi
+
+  local identities=""
+  local count=0
+  local identity=""
+
+  while IFS= read -r identity; do
+    [[ -n "$identity" ]] || continue
+    count=$((count + 1))
+    if [[ -z "$identities" ]]; then
+      identities="$identity"
+    else
+      identities="$identities
+$identity"
+    fi
+  done <<EOF
+$(security find-identity -v -p codesigning 2>/dev/null   | sed -n 's/.*"\(Developer ID Application:.*\)".*/\1/p')
+EOF
+
+  if [[ "$count" -eq 0 ]]; then
+    log "No Developer ID Application identity found; using ad-hoc signing." >&2
+    printf '%s\n' "-"
+    return
+  fi
+
+  if [[ "$count" -gt 1 ]]; then
+    printf 'Multiple Developer ID Application identities found:\n%s\n' "$identities" >&2
+    die 'Set SIGN_IDENTITY explicitly to choose one.'
+  fi
+
+  printf '%s\n' "$identities"
+}
+
 [[ "$(uname -s)" == "Darwin" ]] || die "This script only supports macOS."
 
-for command in node npm cargo rustc go codesign xattr ditto; do
+for command in node npm cargo rustc go codesign security xattr ditto; do
   command -v "$command" >/dev/null 2>&1 || die "Missing required command: $command"
 done
 
@@ -44,14 +81,13 @@ if [[ -z "$APP_BUNDLE" ]]; then
 fi
 [[ -n "$APP_BUNDLE" ]] || die "Build succeeded but $APP_NAME.app could not be found under src-tauri/target."
 
+SELECTED_IDENTITY="$(detect_signing_identity)"
 log "Signing $APP_BUNDLE"
-if [[ "$SIGN_IDENTITY" == "-" ]]; then
-  # Ad-hoc signing is sufficient for a locally built app used on this Mac.
+if [[ "$SELECTED_IDENTITY" == "-" ]]; then
   codesign --force --deep --sign - "$APP_BUNDLE"
 else
-  # Example:
-  # SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" ./scripts/build-install-macos.sh
-  codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+  log "Using signing identity: $SELECTED_IDENTITY"
+  codesign --force --deep --options runtime --timestamp --sign "$SELECTED_IDENTITY" "$APP_BUNDLE"
 fi
 
 log "Verifying code signature"
@@ -66,7 +102,6 @@ fi
 DEST="$INSTALL_DIR/$APP_NAME.app"
 log "Installing to $DEST"
 
-# Ask the running app to quit before replacing it. Ignore errors when it is not running.
 osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
 sleep 1
 
@@ -89,8 +124,8 @@ log "Verifying installed application"
 codesign --verify --deep --strict --verbose=2 "$DEST"
 
 printf '\nInstalled successfully: %s\n' "$DEST"
-printf 'Signing identity: %s\n' "$SIGN_IDENTITY"
-if [[ "$SIGN_IDENTITY" == "-" ]]; then
+printf 'Signing identity: %s\n' "$SELECTED_IDENTITY"
+if [[ "$SELECTED_IDENTITY" == "-" ]]; then
   printf 'This is an ad-hoc signed local build. It does not use TestFlight and has no TestFlight expiration.\n'
 else
   printf 'Developer ID signing was used. Notarization is not performed by this script.\n'
