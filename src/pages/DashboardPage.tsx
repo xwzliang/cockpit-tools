@@ -2696,13 +2696,20 @@ export function DashboardPage({
   const renderAccountList = <T extends { id: string },>(
     accounts: T[],
     renderAccount: (account: T) => React.ReactNode,
+    currentAccountId?: string | null,
   ) => (
     <div className="dashboard-account-list">
-      {accounts.map((account) => (
-        <div className="dashboard-account-list-item" key={account.id}>
-          {renderAccount(account)}
-        </div>
-      ))}
+      {accounts.map((account) => {
+        const isCurrent = Boolean(currentAccountId) && account.id === currentAccountId;
+        return (
+          <div
+            className={`dashboard-account-list-item${isCurrent ? ' current' : ''}`}
+            key={account.id}
+          >
+            {renderAccount(account)}
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -2710,31 +2717,39 @@ export function DashboardPage({
     switch (platformId) {
       case 'antigravity':
       case 'antigravity_ide':
-        return renderAccountList(agAccounts, renderAgAccountContent);
+        return renderAccountList(agAccounts, renderAgAccountContent, agCurrentId);
       case 'codex':
-        return renderAccountList(codexAccounts, renderCodexAccountContent);
+        return renderAccountList(codexAccounts, renderCodexAccountContent, codexCurrentId);
       case 'claude_manager':
-        return renderAccountList(claudeAccounts, renderClaudeAccountContent);
+        return renderAccountList(claudeAccounts, renderClaudeAccountContent, claudeCurrentId);
       case 'zed':
-        return renderAccountList(zedAccounts, renderZedAccountContent);
+        return renderAccountList(zedAccounts, renderZedAccountContent, zedCurrentId);
       case 'github-copilot':
-        return renderAccountList(githubCopilotAccounts, renderGitHubCopilotAccountContent);
+        return renderAccountList(
+          githubCopilotAccounts,
+          renderGitHubCopilotAccountContent,
+          githubCopilotCurrentId,
+        );
       case 'windsurf':
-        return renderAccountList(windsurfAccounts, renderWindsurfAccountContent);
+        return renderAccountList(windsurfAccounts, renderWindsurfAccountContent, windsurfCurrentId);
       case 'kiro':
-        return renderAccountList(kiroAccounts, renderKiroAccountContent);
+        return renderAccountList(kiroAccounts, renderKiroAccountContent, kiroCurrentId);
       case 'cursor':
-        return renderAccountList(cursorAccounts, renderCursorAccountContent);
+        return renderAccountList(cursorAccounts, renderCursorAccountContent, cursorCurrentId);
       case 'grok':
-        return renderAccountList(grokAccounts, renderGrokAccountContent);
+        return renderAccountList(grokAccounts, renderGrokAccountContent, grokCurrentId);
       case 'codebuddy':
-        return renderAccountList(codebuddyAccounts, renderCodebuddyAccountContent);
+        return renderAccountList(codebuddyAccounts, renderCodebuddyAccountContent, codebuddyCurrentId);
       case 'codebuddy_cn':
-        return renderAccountList(codebuddyCnAccounts, renderCodebuddyCnAccountContent);
+        return renderAccountList(
+          codebuddyCnAccounts,
+          renderCodebuddyCnAccountContent,
+          codebuddyCnCurrentId,
+        );
       case 'qoder':
-        return renderAccountList(qoderAccounts, renderQoderAccountContent);
+        return renderAccountList(qoderAccounts, renderQoderAccountContent, qoderCurrentId);
       case 'zcode':
-        return renderAccountList(zcodeAccounts, renderZcodeAccountContent);
+        return renderAccountList(zcodeAccounts, renderZcodeAccountContent, zcodeCurrentId);
       case 'trae':
       case 'trae_solo':
       case 'trae_cn':
@@ -2743,10 +2758,15 @@ export function DashboardPage({
         return renderAccountList(
           traeAccountsByPlatform[traePlatformId],
           (account) => renderTraeAccountContent(account, traePlatformId),
+          traeCurrentIdsByPlatform[traePlatformId],
         );
       }
       case 'workbuddy':
-        return renderAccountList(workbuddyAccounts, renderWorkbuddyAccountContent);
+        return renderAccountList(
+          workbuddyAccounts,
+          renderWorkbuddyAccountContent,
+          workbuddyCurrentId,
+        );
       default:
         return null;
     }
