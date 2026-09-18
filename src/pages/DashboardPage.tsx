@@ -2697,21 +2697,30 @@ export function DashboardPage({
     accounts: T[],
     renderAccount: (account: T) => React.ReactNode,
     currentAccountId?: string | null,
-  ) => (
-    <div className="dashboard-account-list">
-      {accounts.map((account) => {
-        const isCurrent = Boolean(currentAccountId) && account.id === currentAccountId;
-        return (
-          <div
-            className={`dashboard-account-list-item${isCurrent ? ' current' : ''}`}
-            key={account.id}
-          >
-            {renderAccount(account)}
-          </div>
-        );
-      })}
-    </div>
-  );
+  ) => {
+    const orderedAccounts = currentAccountId
+      ? [
+          ...accounts.filter((account) => account.id === currentAccountId),
+          ...accounts.filter((account) => account.id !== currentAccountId),
+        ]
+      : accounts;
+
+    return (
+      <div className="dashboard-account-list">
+        {orderedAccounts.map((account) => {
+          const isCurrent = Boolean(currentAccountId) && account.id === currentAccountId;
+          return (
+            <div
+              className={`dashboard-account-list-item${isCurrent ? ' current' : ''}`}
+              key={account.id}
+            >
+              {renderAccount(account)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   const renderAllPlatformAccounts = (platformId: PlatformId) => {
     switch (platformId) {
