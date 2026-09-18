@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 SKIP_INSTALL="${SKIP_INSTALL:-0}"
+AUTO_INSTALL_DEPS="${AUTO_INSTALL_DEPS:-1}"
 
 log() {
   printf '\n==> %s\n' "$*"
@@ -14,6 +15,105 @@ log() {
 die() {
   printf 'Error: %s\n' "$*" >&2
   exit 1
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+load_common_paths() {
+  if [[ -f "$HOME/.cargo/env" ]]; then
+    # rustup writes this file and it is safe to source repeatedly.
+    # shellcheck disable=SC1091
+    . "$HOME/.cargo/env"
+  fi
+
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+  elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+  fi
+}
+
+ensure_xcode_cli() {
+  if xcode-select -p >/dev/null 2>&1; then
+    return
+  fi
+
+  if [[ "$AUTO_INSTALL_DEPS" != "1" ]]; then
+    die "Xcode Command Line Tools are required. Run: xcode-select --install"
+  fi
+
+  log "Xcode Command Line Tools are required; opening Apple's installer."
+  xcode-select --install >/dev/null 2>&1 || true
+  die "Complete the Xcode Command Line Tools installation, then run this script again."
+}
+
+ensure_homebrew() {
+  load_common_paths
+  if have brew; then
+    return
+  fi
+
+  [[ "$AUTO_INSTALL_DEPS" == "1" ]] || die "Homebrew is required to install missing build dependencies."
+
+  log "Installing Homebrew"
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  load_common_paths
+  have brew || die "Homebrew installation completed but 'brew' is still unavailable."
+}
+
+ensure_brew_package() {
+  local command_name="$1"
+  local formula="$2"
+
+  if have "$command_name"; then
+    return
+  fi
+
+  ensure_homebrew
+  log "Installing $formula with Homebrew"
+  brew install "$formula"
+  load_common_paths
+  have "$command_name" || die "Installed $formula, but '$command_name' is still unavailable."
+}
+
+ensure_rust() {
+  load_common_paths
+  if have cargo && have rustc; then
+    return
+  fi
+
+  [[ "$AUTO_INSTALL_DEPS" == "1" ]] || die "Rust is required. Install it from https://rustup.rs/"
+
+  log "Installing Rust toolchain with rustup"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs     | sh -s -- -y --profile minimal
+  load_common_paths
+
+  have cargo || die "Rust installation completed but 'cargo' is still unavailable."
+  have rustc || die "Rust installation completed but 'rustc' is still unavailable."
+}
+
+ensure_build_dependencies() {
+  ensure_xcode_cli
+
+  have curl || die "The macOS curl command is required."
+
+  ensure_brew_package node node
+  have npm || die "Node.js is installed but npm is unavailable."
+  ensure_brew_package go go
+  ensure_rust
+
+  for command in codesign security xattr ditto osascript find sed; do
+    have "$command" || die "Missing required macOS system command: $command"
+  done
+
+  log "Build dependencies are ready"
+  printf 'Node:  %s\n' "$(node --version)"
+  printf 'npm:   %s\n' "$(npm --version)"
+  printf 'Go:    %s\n' "$(go version)"
+  printf 'Rust:  %s\n' "$(rustc --version)"
+  printf 'Cargo: %s\n' "$(cargo --version)"
 }
 
 detect_signing_identity() {
@@ -55,13 +155,8 @@ EOF
 
 [[ "$(uname -s)" == "Darwin" ]] || die "This script only supports macOS."
 
-for command in node npm cargo rustc go codesign security xattr ditto; do
-  command -v "$command" >/dev/null 2>&1 || die "Missing required command: $command"
-done
-
-if ! xcode-select -p >/dev/null 2>&1; then
-  die "Xcode Command Line Tools are required. Run: xcode-select --install"
-fi
+load_common_paths
+ensure_build_dependencies
 
 cd "$REPO_ROOT"
 
