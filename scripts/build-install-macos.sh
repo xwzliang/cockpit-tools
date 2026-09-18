@@ -174,11 +174,11 @@ log "Building the macOS application"
 # which require the maintainer's Tauri updater private key. Disable them here.
 npm run tauri -- build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
-APP_BUNDLE="$(find "$REPO_ROOT/src-tauri/target" -type d -path "*/release/bundle/macos/$APP_NAME.app" -print 2>/dev/null | head -n 1 || true)"
+APP_BUNDLE="$(find "$REPO_ROOT/target" -type d -path "*/release/bundle/macos/$APP_NAME.app" -print 2>/dev/null | head -n 1 || true)"
 if [[ -z "$APP_BUNDLE" ]]; then
-  APP_BUNDLE="$(find "$REPO_ROOT/src-tauri/target" -type d -name "$APP_NAME.app" -print 2>/dev/null | head -n 1 || true)"
+  APP_BUNDLE="$(find "$REPO_ROOT/target" -type d -name "$APP_NAME.app" -print 2>/dev/null | head -n 1 || true)"
 fi
-[[ -n "$APP_BUNDLE" ]] || die "Build succeeded but $APP_NAME.app could not be found under src-tauri/target."
+[[ -n "$APP_BUNDLE" ]] || die "Build succeeded but $APP_NAME.app could not be found under $REPO_ROOT/target."
 
 SELECTED_IDENTITY="$(detect_signing_identity)"
 log "Signing $APP_BUNDLE"
