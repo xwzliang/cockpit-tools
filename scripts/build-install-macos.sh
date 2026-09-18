@@ -168,10 +168,11 @@ else
 fi
 
 log "Building the macOS application"
-# This is a personal local build. The upstream project enables updater artifact
-# generation for official releases, which requires the maintainer's Tauri updater
-# private key. We only need the .app here, so disable updater artifacts for this build.
-npm run tauri -- build --config '{"bundle":{"createUpdaterArtifacts":false}}'
+# Build only the .app bundle for local installation. Avoid generating a DMG,
+# because this script installs the app directly into /Applications.
+# The upstream project also enables updater artifacts for official releases,
+# which require the maintainer's Tauri updater private key. Disable them here.
+npm run tauri -- build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
 APP_BUNDLE="$(find "$REPO_ROOT/src-tauri/target" -type d -path "*/release/bundle/macos/$APP_NAME.app" -print 2>/dev/null | head -n 1 || true)"
 if [[ -z "$APP_BUNDLE" ]]; then
