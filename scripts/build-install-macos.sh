@@ -140,7 +140,18 @@ $(security find-identity -v -p codesigning 2>/dev/null   | sed -n 's/.*"\(Develo
 EOF
 
   if [[ "$count" -eq 0 ]]; then
-    log "No Developer ID Application identity found; using ad-hoc signing." >&2
+    local development_identities=""
+    development_identities="$(security find-identity -v -p codesigning 2>/dev/null \
+      | sed -n 's/.*"\(Apple Development:.*\)".*/\1/p')"
+
+    if [[ -n "$development_identities" ]]; then
+      log "Apple Development signing identity found, but no Developer ID Application identity is available." >&2
+      printf '%s\n' "$development_identities" | sed 's/^/    /' >&2
+      log "Apple Development identities are not used for this local distribution build; using ad-hoc signing instead." >&2
+    else
+      log "No Developer ID Application identity found; using ad-hoc signing for local installation." >&2
+    fi
+
     printf '%s\n' "-"
     return
   fi
@@ -225,7 +236,9 @@ codesign --verify --deep --strict --verbose=2 "$DEST"
 printf '\nInstalled successfully: %s\n' "$DEST"
 printf 'Signing identity: %s\n' "$SELECTED_IDENTITY"
 if [[ "$SELECTED_IDENTITY" == "-" ]]; then
-  printf 'This is an ad-hoc signed local build. It does not use TestFlight and has no TestFlight expiration.\n'
+  printf 'This is an ad-hoc signed local build intended for installation on your own Mac(s).\n'
+  printf 'No Developer ID Application certificate was used; Apple Development certificates are intentionally ignored here.\n'
+  printf 'It does not use TestFlight and has no TestFlight expiration.\n'
 else
   printf 'Developer ID signing was used. Notarization is not performed by this script.\n'
 fi
