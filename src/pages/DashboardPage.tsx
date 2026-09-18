@@ -28,7 +28,7 @@ import {
   usePlatformLayoutStore,
 } from '../stores/usePlatformLayoutStore';
 import { Page } from '../types/navigation';
-import { Users, CheckCircle2, Sparkles, RotateCw, Play, Github, Tag, ChevronDown, EyeOff, X } from 'lucide-react';
+import { Users, RotateCw, Play, Github, Tag, ChevronDown, EyeOff, X } from 'lucide-react';
 import { TagEditModal } from '../components/TagEditModal';
 import { Account } from '../types/account';
 import {
@@ -2658,6 +2658,65 @@ export function DashboardPage({
     });
   };
 
+  const renderAccountList = <T extends { id: string },>(
+    accounts: T[],
+    renderAccount: (account: T) => React.ReactNode,
+  ) => (
+    <div className="dashboard-account-list">
+      {accounts.map((account) => (
+        <div className="dashboard-account-list-item" key={account.id}>
+          {renderAccount(account)}
+        </div>
+      ))}
+    </div>
+  );
+
+  const renderAllPlatformAccounts = (platformId: PlatformId) => {
+    switch (platformId) {
+      case 'antigravity':
+      case 'antigravity_ide':
+        return renderAccountList(agAccounts, renderAgAccountContent);
+      case 'codex':
+        return renderAccountList(codexAccounts, renderCodexAccountContent);
+      case 'claude_manager':
+        return renderAccountList(claudeAccounts, renderClaudeAccountContent);
+      case 'zed':
+        return renderAccountList(zedAccounts, renderZedAccountContent);
+      case 'github-copilot':
+        return renderAccountList(githubCopilotAccounts, renderGitHubCopilotAccountContent);
+      case 'windsurf':
+        return renderAccountList(windsurfAccounts, renderWindsurfAccountContent);
+      case 'kiro':
+        return renderAccountList(kiroAccounts, renderKiroAccountContent);
+      case 'cursor':
+        return renderAccountList(cursorAccounts, renderCursorAccountContent);
+      case 'grok':
+        return renderAccountList(grokAccounts, renderGrokAccountContent);
+      case 'codebuddy':
+        return renderAccountList(codebuddyAccounts, renderCodebuddyAccountContent);
+      case 'codebuddy_cn':
+        return renderAccountList(codebuddyCnAccounts, renderCodebuddyCnAccountContent);
+      case 'qoder':
+        return renderAccountList(qoderAccounts, renderQoderAccountContent);
+      case 'zcode':
+        return renderAccountList(zcodeAccounts, renderZcodeAccountContent);
+      case 'trae':
+      case 'trae_solo':
+      case 'trae_cn':
+      case 'trae_solo_cn': {
+        const traePlatformId = platformId as TraePlatformId;
+        return renderAccountList(
+          traeAccountsByPlatform[traePlatformId],
+          (account) => renderTraeAccountContent(account, traePlatformId),
+        );
+      }
+      case 'workbuddy':
+        return renderAccountList(workbuddyAccounts, renderWorkbuddyAccountContent);
+      default:
+        return null;
+    }
+  };
+
   const platformCounts: Record<PlatformId, number> = {
     antigravity: stats.antigravity,
     antigravity_ide: stats.antigravity,
@@ -2711,9 +2770,13 @@ export function DashboardPage({
       if (entryId === API_RELAY_LAYOUT_ENTRY_ID) {
         continue;
       }
-      const entryPlatformIds = resolveEntryPlatformIds(entryId, platformGroups).filter(
-        (candidate) => !remoteHiddenPlatformSet.has(candidate),
-      );
+      const entryPlatformIds = resolveEntryPlatformIds(entryId, platformGroups).filter((candidate) => {
+        if (remoteHiddenPlatformSet.has(candidate)) {
+          return false;
+        }
+        const normalizedCandidate = normalizeDashboardCardPlatformId(candidate);
+        return isAccountPlatform(normalizedCandidate) && (platformCounts[normalizedCandidate] ?? 0) > 0;
+      });
       if (entryPlatformIds.length === 0) {
         continue;
       }
@@ -2795,27 +2858,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderAgAccountContent(agCurrentAccount)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {agRecommended ? (
-                renderAgAccountContent(agRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('overview')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -2842,27 +2885,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderCodexAccountContent(codexCurrentAccount)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {codexRecommended ? (
-                renderCodexAccountContent(codexRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('codex')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -2889,27 +2912,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderClaudeAccountContent(claudeCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {claudeRecommended ? (
-                renderClaudeAccountContent(claudeRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('claude')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -2936,27 +2939,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderZedAccountContent(zedCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {zedRecommended ? (
-                renderZedAccountContent(zedRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('zed')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -2983,27 +2966,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderGitHubCopilotAccountContent(githubCopilotCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {githubCopilotRecommended ? (
-                renderGitHubCopilotAccountContent(githubCopilotRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('github-copilot')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3030,27 +2993,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderWindsurfAccountContent(windsurfCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {windsurfRecommended ? (
-                renderWindsurfAccountContent(windsurfRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('windsurf')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3077,27 +3020,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderKiroAccountContent(kiroCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {kiroRecommended ? (
-                renderKiroAccountContent(kiroRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('kiro')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3124,27 +3047,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderCursorAccountContent(cursorCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {cursorRecommended ? (
-                renderCursorAccountContent(cursorRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('cursor')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3171,25 +3074,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderGrokAccountContent(grokCurrent)}
-            </div>
-            <div className="split-divider"></div>
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {grokRecommended ? (
-                renderGrokAccountContent(grokRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('grok')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3216,27 +3101,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderCodebuddyAccountContent(codebuddyCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {codebuddyRecommended ? (
-                renderCodebuddyAccountContent(codebuddyRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('codebuddy')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3263,27 +3128,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderCodebuddyCnAccountContent(codebuddyCnCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {codebuddyCnRecommended ? (
-                renderCodebuddyCnAccountContent(codebuddyCnRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('codebuddy-cn')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3310,27 +3155,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderQoderAccountContent(qoderCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {qoderRecommended ? (
-                renderQoderAccountContent(qoderRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('qoder')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3357,27 +3182,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderZcodeAccountContent(zcodeCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {zcodeRecommended ? (
-                renderZcodeAccountContent(zcodeRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('zcode')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3408,27 +3213,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderTraeAccountContent(current, traePlatformId)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {recommended ? (
-                renderTraeAccountContent(recommended, traePlatformId)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => navigateToPlatform(platformId)}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3467,27 +3252,7 @@ export function DashboardPage({
             </div>
           </div>
 
-          <div className="split-content">
-            <div className="split-half current-half">
-              <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-              {renderWorkbuddyAccountContent(workbuddyCurrent)}
-            </div>
-
-            <div className="split-divider"></div>
-
-            <div className="split-half recommend-half">
-              <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-              {workbuddyRecommended ? (
-                renderWorkbuddyAccountContent(workbuddyRecommended)
-              ) : (
-                <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-              )}
-            </div>
-          </div>
-
-          <button className="card-footer-action" onClick={() => onNavigate('workbuddy')}>
-            {t('dashboard.viewAllAccounts', '查看所有账号')}
-          </button>
+          {renderAllPlatformAccounts(platformId)}
         </div>
       );
     }
@@ -3505,23 +3270,7 @@ export function DashboardPage({
           </div>
         </div>
 
-        <div className="split-content">
-          <div className="split-half current-half">
-            <span className="half-label"><CheckCircle2 size={12} /> {t('dashboard.current', '当前账户')}</span>
-            <div className="empty-slot-text">{t('dashboard.noData', '暂无数据')}</div>
-          </div>
-
-          <div className="split-divider"></div>
-
-          <div className="split-half recommend-half">
-            <span className="half-label"><Sparkles size={12} /> {t('dashboard.recommended', '推荐账号')}</span>
-            <div className="empty-slot-text">{t('dashboard.noRecommendation', '暂无更好推荐')}</div>
-          </div>
-        </div>
-
-        <button className="card-footer-action" onClick={() => navigateToPlatform(platformId)}>
-          {t('dashboard.viewAllAccounts', '查看所有账号')}
-        </button>
+        {renderAllPlatformAccounts(platformId)}
       </div>
     );
   };
@@ -3566,6 +3315,10 @@ export function DashboardPage({
         </div>
 
         {visibleDashboardEntryOrder.map((entryId) => {
+          if (entryId !== API_RELAY_LAYOUT_ENTRY_ID && (entryCounts.get(entryId) ?? 0) === 0) {
+            return null;
+          }
+
           if (entryId === API_RELAY_LAYOUT_ENTRY_ID) {
             return (
               <button
