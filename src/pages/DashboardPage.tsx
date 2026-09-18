@@ -3189,8 +3189,6 @@ export function DashboardPage({
 
     if (isTraeSuitePlatform(platformId)) {
       const traePlatformId = platformId as TraePlatformId;
-      const current = getTraeCurrentForPlatform(traePlatformId);
-      const recommended = getTraeRecommendedForPlatform(traePlatformId);
 
       return (
         <div className="main-card windsurf-card" key={platformId}>
