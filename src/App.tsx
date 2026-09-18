@@ -1337,8 +1337,15 @@ function MainApp() {
   const openAutomaticUpdatePrompt = useCallback((
     version: string,
     mode: RemoteUpdatePromptMode,
+    remindersEnabled: boolean,
   ) => {
-    if (mode !== 'popup' || autoPromptedUpdateVersionsRef.current.has(version)) {
+    // A remote popup policy may choose how an enabled reminder is presented,
+    // but it must never override the user's explicit "do not prompt" setting.
+    if (
+      !remindersEnabled
+      || mode !== 'popup'
+      || autoPromptedUpdateVersionsRef.current.has(version)
+    ) {
       return;
     }
     autoPromptedUpdateVersionsRef.current.add(version);
@@ -2332,7 +2339,7 @@ function MainApp() {
         const skippedVersion = (settings?.skipped_version ?? '').trim();
         const remoteConfigState = await fetchRemoteConfigState(false);
         const updatePromptMode = remoteConfigState.updatePromptMode;
-        const shouldAutoOpenUpdatePrompt = updatePromptMode === 'popup';
+        const shouldAutoOpenUpdatePrompt = remindOnUpdate && updatePromptMode === 'popup';
         setUpdateRemindersEnabled(remindOnUpdate);
         writeUpdateLog(
           'info',
@@ -2387,7 +2394,7 @@ function MainApp() {
                 });
               } else {
                 preparedUpdateInfo = await prepareUpdateNotificationInfo(update);
-                if (remindOnUpdate || shouldAutoOpenUpdatePrompt) {
+                if (remindOnUpdate) {
                   setUpdateNotificationInfo(preparedUpdateInfo);
                   handleUpdateCheckResult({
                     source: 'auto',
@@ -2396,7 +2403,7 @@ function MainApp() {
                     latestVersion: preparedUpdateInfo.latest_version,
                   });
                 }
-                openAutomaticUpdatePrompt(update.version, updatePromptMode);
+                openAutomaticUpdatePrompt(update.version, updatePromptMode, remindOnUpdate);
                 console.log('[App] Update found, downloading silently with retry...');
                 writeUpdateLog('info', `检测到新版本，开始静默下载: version=${update.version}`);
                 updateDownloadOwnerRef.current = 'silent';
@@ -2648,7 +2655,7 @@ function MainApp() {
                 });
               } else {
                 const info = await prepareUpdateNotificationInfo(update);
-                if (remindOnUpdate || shouldAutoOpenUpdatePrompt) {
+                if (remindOnUpdate) {
                   setUpdateNotificationInfo(info);
                 }
                 handleUpdateCheckResult({
@@ -2657,7 +2664,7 @@ function MainApp() {
                   currentVersion: info.current_version,
                   latestVersion: info.latest_version,
                 });
-                openAutomaticUpdatePrompt(update.version, updatePromptMode);
+                openAutomaticUpdatePrompt(update.version, updatePromptMode, remindOnUpdate);
                 writeUpdateLog(
                   'info',
                   shouldAutoOpenUpdatePrompt
