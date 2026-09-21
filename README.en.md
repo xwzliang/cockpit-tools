@@ -21,6 +21,38 @@ A **universal AI IDE account management tool**, currently supporting **Antigravi
 
 ---
 
+## macOS Quick Build & Install
+
+The repository includes out-of-the-box scripts for automated building, signing, and installation on macOS:
+
+### 1. Signing Setup (Optional)
+
+If you wish to sign with an Apple Developer ID certificate, run the setup script to import your certificate (if omitted, the build script automatically falls back to ad-hoc signing for local use):
+
+```bash
+# Automatically detects and imports a .p12 / .pfx certificate from iCloud Drive
+./scripts/setup-macos-signing.sh
+
+# Or specify a certificate file explicitly
+./scripts/setup-macos-signing.sh /path/to/certificate.p12
+```
+
+### 2. One-Command Build & Install
+
+Run the following script to automatically check and install missing build dependencies (Xcode CLI, Homebrew, Node.js, Go, Rust), compile the app, and install directly into `/Applications`:
+
+```bash
+./scripts/build-install-macos.sh
+```
+
+**Optional Environment Variables**:
+- `SKIP_INSTALL=1 ./scripts/build-install-macos.sh`: Build only, skip installation.
+- `INSTALL_DIR="$HOME/Applications" ./scripts/build-install-macos.sh`: Custom installation directory (default: `/Applications`).
+- `SIGN_IDENTITY="Developer ID Application: xxx" ./scripts/build-install-macos.sh`: Explicitly specify signing identity.
+- `AUTO_INSTALL_DEPS=0 ./scripts/build-install-macos.sh`: Disable automatic dependency installation.
+
+---
+
 ## Sponsors
 
 <table>

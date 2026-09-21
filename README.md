@@ -22,6 +22,38 @@
 
 ---
 
+## macOS 本地快速构建与安装
+
+项目提供了面向 macOS 的开箱即用自动化构建、签名与安装脚本：
+
+### 1. 签名配置（可选）
+
+如需使用 Apple Developer ID 证书进行签名，可运行签名配置脚本导入证书（若无需 Developer ID，构建脚本会自动降级为 ad-hoc 签名供本地使用）：
+
+```bash
+# 自动检测并导入 iCloud Drive 目录下的 .p12 / .pfx 证书
+./scripts/setup-macos-signing.sh
+
+# 或显式指定证书路径
+./scripts/setup-macos-signing.sh /path/to/certificate.p12
+```
+
+### 2. 一键构建并安装
+
+运行以下脚本，将自动检查并安装所需依赖（Xcode CLI、Homebrew、Node.js、Go、Rust）、编译应用并直接安装到 `/Applications`：
+
+```bash
+./scripts/build-install-macos.sh
+```
+
+**可选环境变量**：
+- `SKIP_INSTALL=1 ./scripts/build-install-macos.sh`：仅构建应用，跳过安装步骤。
+- `INSTALL_DIR="$HOME/Applications" ./scripts/build-install-macos.sh`：自定义安装目录（默认为 `/Applications`）。
+- `SIGN_IDENTITY="Developer ID Application: xxx" ./scripts/build-install-macos.sh`：指定签名证书身份。
+- `AUTO_INSTALL_DEPS=0 ./scripts/build-install-macos.sh`：关闭依赖自动检测与安装。
+
+---
+
 ## 赞助商
 
 <table>
