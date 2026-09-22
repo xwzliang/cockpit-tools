@@ -35,18 +35,39 @@ load_common_paths() {
   fi
 }
 
-ensure_xcode_cli() {
-  if xcode-select -p >/dev/null 2>&1; then
-    return
+ensure_xcode() {
+  local xcode_app="/Applications/Xcode.app"
+  local xcode_dev="$xcode_app/Contents/Developer"
+
+  if [[ ! -d "$xcode_dev" ]]; then
+    local alt_xcode=""
+    alt_xcode="$(mdfind "kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'" 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$alt_xcode" && -d "$alt_xcode/Contents/Developer" ]]; then
+      xcode_app="$alt_xcode"
+      xcode_dev="$alt_xcode/Contents/Developer"
+    else
+      die "Xcode is not installed.
+Building Cockpit Tools on macOS requires full Xcode to compile native Swift packages (MacosNativeMenuSwift).
+Please install Xcode from the Mac App Store or https://developer.apple.com/download/all/ and run this script again."
+    fi
   fi
 
-  if [[ "$AUTO_INSTALL_DEPS" != "1" ]]; then
-    die "Xcode Command Line Tools are required. Run: xcode-select --install"
+  local current_dev_dir=""
+  current_dev_dir="$(xcode-select -p 2>/dev/null || true)"
+
+  if [[ "$current_dev_dir" != "$xcode_dev" ]]; then
+    log "Switching active developer directory to $xcode_dev"
+    sudo xcode-select --switch "$xcode_dev"
   fi
 
-  log "Xcode Command Line Tools are required; opening Apple's installer."
-  xcode-select --install >/dev/null 2>&1 || true
-  die "Complete the Xcode Command Line Tools installation, then run this script again."
+  if ! xcodebuild -license check >/dev/null 2>&1; then
+    log "Accepting Xcode license agreement"
+    sudo xcodebuild -license accept
+  fi
+
+  if ! xcrun --sdk macosx --show-sdk-platform-path >/dev/null 2>&1; then
+    die "Xcode is installed at $xcode_app, but xcrun cannot resolve the macOS platform path."
+  fi
 }
 
 ensure_homebrew() {
@@ -95,7 +116,7 @@ ensure_rust() {
 }
 
 ensure_build_dependencies() {
-  ensure_xcode_cli
+  ensure_xcode
 
   have curl || die "The macOS curl command is required."
 
