@@ -14,6 +14,8 @@ import { CodexAccountPoolHealthModal } from "../components/CodexAccountPoolHealt
 import { CodexStatsRangePicker } from "../components/CodexStatsRangePicker";
 import { CodexUsageTrend } from "../components/codex/CodexUsageTrend";
 import { PaginationControls } from "../components/PaginationControls";
+import { resolveCodexApiServiceLogModelPair } from "../utils/codexApiServiceLogModel";
+import { requestCodexOpenAddAccount } from "../utils/codexAddAccountRequest";
 import type {
   CodexLocalAccessCustomRoutingRule,
   CodexLocalAccessScope,
@@ -294,7 +296,6 @@ export function CodexApiServiceView(props: CodexApiServiceViewProps) {
           </span>
           <ManualHelpIconButton className="platform-header-help" />
         </div>
-        <div className="page-top-strip-right-placeholder" aria-hidden="true" />
       </div>
 
       <div className="page-tabs-row page-tabs-center page-tabs-row-with-leading">
@@ -2422,28 +2423,43 @@ export function CodexApiServiceView(props: CodexApiServiceViewProps) {
                     const serviceTier = (event.serviceTier || "")
                       .trim()
                       .toLowerCase();
-                    const serviceTierIsFast =
-                      serviceTier === "priority" || serviceTier === "ultrafast";
+                    const serviceTierIsFast = serviceTier === "priority";
                     const serviceTierLabel =
                       serviceTier === "priority"
                         ? t("codex.speed.fast", "快速")
-                        : serviceTier === "ultrafast"
-                          ? t("codex.speed.ultrafast", "超高速")
-                          : serviceTier === "standard"
-                            ? t("codex.speed.standard", "标准")
-                            : event.serviceTier
-                              ? t("codex.apiService.logs.serviceTierValue", {
-                                  tier: event.serviceTier,
-                                  defaultValue: "Tier {{tier}}",
-                                })
-                              : "";
+                        : serviceTier === "standard"
+                          ? t("codex.speed.standard", "标准")
+                          : event.serviceTier
+                            ? t("codex.apiService.logs.serviceTierValue", {
+                                tier: event.serviceTier,
+                                defaultValue: "Tier {{tier}}",
+                              })
+                            : "";
+                    // 始终标出实际上游模型（与请求模型一致时也展示）；仅当日志未记录上游模型时回退为单行。
+                    const { requestedModel, upstreamModel } =
+                      resolveCodexApiServiceLogModelPair(event);
                     return (
                       <div
                         key={`${event.timestamp}-${event.requestId || event.apiKeyId}-${index}`}
                         className="codex-api-service-log-row"
                       >
                         <div>
-                          <strong>{event.modelId || "--"}</strong>
+                          <div className="codex-api-service-log-model">
+                            <strong title={requestedModel}>
+                              {requestedModel}
+                            </strong>
+                            {upstreamModel ? (
+                              <span
+                                className="codex-api-service-log-model-upstream"
+                                title={t(
+                                  "codex.apiService.logs.upstreamModel",
+                                  "实际模型",
+                                )}
+                              >
+                                ↳ {upstreamModel}
+                              </span>
+                            ) : null}
+                          </div>
                           <span
                             className={`codex-api-service-pill ${event.success ? "success" : "error"}`}
                           >
@@ -4042,6 +4058,13 @@ export function CodexApiServiceView(props: CodexApiServiceViewProps) {
         onClose={() => setHealthModalOpen(false)}
         onRecover={(accountId) => handleRecoverAccounts([accountId])}
         onRecoverAll={handleRecoverAccounts}
+        onReauthorize={(accountId) => {
+          setHealthModalOpen(false);
+          requestCodexOpenAddAccount({
+            targetAccountId: accountId,
+            tab: "tempLogin",
+          });
+        }}
       />
 
       <CodexLocalAccessModal
@@ -4138,6 +4161,11 @@ export function CodexApiServiceView(props: CodexApiServiceViewProps) {
         onUpdateImageGenerationModel={(model) =>
           codexLocalAccessService
             .updateCodexLocalAccessImageGenerationModel(model)
+            .then(setState)
+        }
+        onUpdateImageGenerationAccounts={(accountIds) =>
+          codexLocalAccessService
+            .updateCodexLocalAccessImageGenerationAccounts(accountIds)
             .then(setState)
         }
         onUpdateUpstreamProxyConfig={(url) =>

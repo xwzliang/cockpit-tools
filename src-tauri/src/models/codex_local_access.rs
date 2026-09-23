@@ -734,6 +734,12 @@ pub struct CodexLocalAccessUsageEvent {
     pub client_instance_id: String,
     #[serde(default)]
     pub model_id: String,
+    /// 客户端请求的模型（保留路由命名空间前缀，如 `cpa/gpt-5.5`）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub requested_model: String,
+    /// 实际发送给上游的模型（账号映射与路由改写之后）。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub upstream_model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway_mode: Option<CodexLocalAccessGatewayMode>,
     #[serde(default)]

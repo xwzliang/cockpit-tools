@@ -1,6 +1,20 @@
 // Codex Local Access 测试：Usage extraction, routing, request conversion and WebSocket behavior。
 // 测试与生产实现共享 super 作用域，验证真实网关、持久化和请求协议行为。
     #[test]
+    fn removed_ultrafast_is_not_injected_but_explicit_requests_are_preserved() {
+        let mut request = json!({"model": "gpt-5.6-sol"});
+        super::apply_default_service_tier_if_missing(&mut request, Some("ultrafast"));
+        assert!(request.get("service_tier").is_none());
+
+        super::apply_default_service_tier_if_missing(&mut request, Some("priority"));
+        assert_eq!(request["service_tier"], "priority");
+
+        let mut explicit = json!({"service_tier": "ultrafast"});
+        super::apply_default_service_tier_if_missing(&mut explicit, Some("priority"));
+        assert_eq!(explicit["service_tier"], "ultrafast");
+    }
+
+    #[test]
     fn extracts_usage_from_codex_response_completed_payload() {
         let payload = json!({
             "type": "response.completed",
@@ -198,6 +212,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             request_id: "req-1".to_string(),
             model: "gpt-5.4".to_string(),
             alias: String::new(),
+            requested_model: String::new(),
+            upstream_model: String::new(),
             account_id: "account-1".to_string(),
             account_email: "user@example.com".to_string(),
             api_key_id: "key-1".to_string(),
@@ -276,6 +292,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             CodexLocalAccessRequestKind::Text,
             None,
             sidecar_event.reasoning_effort.as_deref(),
+            None,
+            None,
             true,
             Some(200),
             None,
@@ -941,6 +959,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
         ] {
             assert!(models.iter().any(|item| item == model));
         }
@@ -3105,6 +3125,8 @@ data: {"error":{"code":"server_error","type":"upstream","message":"stream aborte
             "gpt-5.6-terra",
             "gpt-5.6-luna",
             "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna",
             "gpt-5.3-codex",
             "gpt-5.3-codex-spark",
         ] {
@@ -3121,6 +3143,8 @@ data: {"error":{"code":"server_error","type":"upstream","message":"stream aborte
             default_codex_model_ids(),
             vec![
                 "gpt-6-astra",
+                "gpt-6-sol",
+                "gpt-6-luna",
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",
                 "gpt-5.6-luna",

@@ -86,6 +86,7 @@
     "viewError": "Lihat kesalahan"
   },
   "common": {
+    "retry": "Coba lagi",
     "quotaRefreshScheduler": {
       "busy": "Antrean pembaruan penuh. Coba lagi sebentar.",
       "timeout": "Pembaruan kuota kehabisan waktu. Silakan coba lagi.",
@@ -364,7 +365,11 @@
     "deleteTagWarning": "Apakah Anda yakin ingin menghapus tag ini dari semua akun?",
     "expand": "Perluas",
     "processing": "Memproses...",
-    "selectAll": "Pilih Semua"
+    "selectAll": "Pilih Semua",
+    "quota": {
+      "weeklyWindow": "Mingguan"
+    },
+    "optional": " (opsional)"
   },
   "floatingCard": {
     "selectPlatform": "Ganti platform",
@@ -2239,10 +2244,18 @@
     "refreshAllSuccess": "Penyegaran selesai, {{count}} akun berhasil",
     "refreshAllPartialFailed": "Penyegaran selesai, {{success}} / {{total}} akun berhasil dan beberapa gagal",
     "launchPreview": {
+      "configLoading": "Memuat konfigurasi instans…",
+      "configRefreshing": "Memeriksa konfigurasi instans. Detail yang ada tetap tersedia.",
+      "configLoadTimeout": "Waktu pemuatan konfigurasi instans habis. Silakan coba lagi.",
+      "configChanged": "Konfigurasi instans diubah di tempat lain. Muat ulang sebelum menyimpan atau memulai.",
       "accessModeTitle": "Mode mulai",
       "prosLabel": "Keunggulan:",
       "consLabel": "Kekurangan:",
-      "accessModeDescription": "Pilih cara DeepSeek dimulai; mode ini berbeda pada pergantian model, OAuth, dan penerusan gambar.",
+      "accessModeDescription": "Pilih cara penyedia ini dijalankan; tiap mode berbeda pada pergantian model, OAuth, dan penerusan pembuatan gambar.",
+      "accessModeApiServiceFixed": "Layanan API selalu memakai mode gateway; tidak dapat diubah.",
+      "imageGenApiServiceFixed": "Penerusan pembuatan gambar layanan API dikelola di “Layanan API → Pengaturan”; di sini hanya menampilkan status saat ini.",
+      "oauthBindingApiServiceHint": "Penautan OAuth layanan API dikelola di “Layanan API → Pengaturan”; di sini hanya menampilkan status pintu masuk.",
+      "oauthBindingApiServiceManaged": "Dikelola oleh kumpulan akun layanan API",
       "accessModeGatewayPros": "1: Ganti model di dalam Codex\n2: Tautkan akun OAuth dan gunakan fitur OAuth seperti kompresi jarak jauh dan kontrol peramban\n3: Konfigurasikan akun GPT untuk meneruskan pembuatan gambar",
       "accessModeGatewayCons": "1: Memerlukan gateway lokal instance, jadi sedikit lebih lambat dari langsung",
       "accessModeDirectPros": "1: Tanpa gateway, paling cepat",
@@ -2677,6 +2690,8 @@
       "requestLogSuccess": "Berhasil",
       "requestLogFailed": "Gagal",
       "requestLogTokens": "{{value}} token",
+      "imageForwardLabel": "Aktifkan pembuatan gambar GPT",
+      "imageForwardHint": "Setelah diaktifkan, pilih akun GPT: permintaan pembuatan dan penyuntingan gambar dijalankan oleh akun terpilih dan memakai kuotanya, sedangkan permintaan chat tetap memakai kumpulan akun.",
       "imageGenerationMode": {
         "enabled": "Aktif",
         "imagesOnly": "Gambar saja",
@@ -2746,7 +2761,8 @@
           "recover": "Pulihkan",
           "recovering": "Memulihkan…",
           "recoverAll": "Pulihkan semua",
-          "resyncPool": "Sinkronkan ulang pool akun"
+          "resyncPool": "Sinkronkan ulang pool akun",
+          "reauthorizeHint": "Kredensial akun sudah tidak valid; lakukan login resmi lagi. Mereset penjadwal saja tidak memperbaikinya."
         }
       },
       "testChatModel": "Model uji",
@@ -2971,6 +2987,7 @@
       "resetCreditGrantedAt": "Diberikan",
       "resetCreditExpiresAt": "Kedaluwarsa",
       "windowAccountCostHint": "Tagihan akun (perkiraan harga model)",
+      "windowEstimatedFullCostHint": "Dihitung dari pemakaian saat ini: biaya akun bila jendela ini terpakai penuh",
       "windowUserCostHint": "Tagihan pengguna",
       "windowWeeks": "Kuota {{count}} minggu",
       "windowDays": "Kuota {{count}} hari",
@@ -3062,7 +3079,7 @@
       "heroSubtitle": "Buat pekerjaan bangun berbasis waktu untuk akun Codex OAuth, jalankan tes ad-hoc, dan periksa setiap pemicu di satu tempat.",
       "runtimeReady": "CLI Codex siap",
       "runtimeMissing": "CLI Codex diperlukan",
-      "runtimeCardTitle": "Codex CLI",
+      "runtimeCardTitle": "Cara menjalankan",
       "runtimeUnknownPath": "Jalur tidak terdeteksi",
       "runtimeUnchecked": "Periksa ulang untuk mengambil status terbaru",
       "runtimeVersion": "Versi {{version}}",
@@ -3241,11 +3258,7 @@
         "high": "Tinggi",
         "xhigh": "Sangat Tinggi",
         "max": "Maks"
-      },
-      "officialChatRuntimeTitle": "Langsung resmi",
-      "officialChatRuntimePath": "Chat Codex resmi ChatGPT",
-      "officialChatRuntimeSource": "Langsung resmi",
-      "officialChatRuntimeMessage": "Chat langsung akun OAuth"
+      }
     },
     "sessionManager": {
       "title": "Manajer Sesi",
@@ -3606,6 +3619,13 @@
       }
     },
     "modelProviders": {
+      "keyModels": {
+        "title": "Model kunci",
+        "override": "Atur sendiri",
+        "help": "Saat nonaktif, pengaturan model mengikuti penyedia. Saat aktif, hanya kunci ini yang memakai katalog dan kemampuan tersendiri.",
+        "saved": "Pengaturan model kunci disimpan. Mulai ulang klien yang sedang berjalan untuk menerapkannya.",
+        "inherit": "Ikuti penyedia"
+      },
       "tab": "Penyedia model",
       "desc": "Kelola penyedia model dan beberapa API Key di satu tempat, lalu pakai ulang langsung saat menambahkan akun Codex berbasis API Key.",
       "add": "Tambah penyedia",
@@ -3614,6 +3634,7 @@
       "emptyTitle": "Belum ada penyedia model",
       "emptyDesc": "Klik \"Tambah penyedia\" di kanan atas untuk memulai.",
       "baseUrl": "URL dasar",
+      "customEndpointHint": "Endpoint kustom digunakan: alamat ini bukan endpoint resmi “{{preset}}”. Akan diperlakukan sebagai endpoint kompatibel pihak ketiga; sesuaikan protokol dan katalog model dengan upstream.",
       "modelCatalog": "Model",
       "modelCatalogEmpty": "Tidak ada katalog model",
       "gatewayHint": "Penyedia pihak ketiga dimulai melalui gateway lokal untuk isolasi instans dan konversi protokol. Penyedia resmi OpenAI tetap langsung.",
@@ -3624,6 +3645,8 @@
       "unnamedKey": "Key tanpa nama",
       "createTitle": "Tambah penyedia model",
       "editTitle": "Edit penyedia model",
+      "copySuffix": "Salinan",
+      "duplicate": "Duplikat penyedia (salinan baru tanpa Key)",
       "existingApiKeys": "API Key yang ada",
       "fields": {
         "name": "Nama penyedia",
@@ -3672,7 +3695,8 @@
         "responses": "Responses native",
         "chatCompletions": "Protokol Chat Completions",
         "deepseekResponsesHint": "Mulai DeepSeek untuk memilih gateway atau koneksi langsung resmi, lalu pilih Flash atau Pro. Gateway menampilkan model di Codex; koneksi langsung melewati gateway.",
-        "deepseekChatHint": "DeepSeek Chat Completions menggunakan jembatan gateway lokal untuk jalur lama. Pilih Responses saat Anda memerlukan perilaku alat resmi Codex."
+        "deepseekChatHint": "DeepSeek Chat Completions menggunakan jembatan gateway lokal untuk jalur lama. Pilih Responses saat Anda memerlukan perilaku alat resmi Codex.",
+        "deepseekThirdPartyHint": "Alamat ini bukan endpoint resmi DeepSeek sehingga akan diperlakukan sebagai endpoint kompatibel pihak ketiga; isi katalog model dengan ID model asli dari upstream, bukan nama model resmi."
       },
       "selectSavedProvider": "Penyedia tersimpan",
       "selectSavedApiKey": "API Key tersimpan",
@@ -3894,7 +3918,17 @@
       "renameApiKeyPrompt": "Ganti nama API key",
       "renameApiKeySuccess": "API key diganti nama",
       "renameApiKeyFailed": "Gagal ganti nama API key: {{error}}",
-      "existingApiKeysSearch": "Cari API Key…"
+      "existingApiKeysSearch": "Cari API Key…",
+      "copyConfig": "Salin konfigurasi (tanpa kunci)",
+      "copyConfigSuccess": "Konfigurasi penyedia disalin tanpa kunci API; tempel saat menambah penyedia.",
+      "copyConfigFailed": "Gagal menyalin konfigurasi: {{error}}",
+      "importConfig": "Impor konfigurasi dari papan klip",
+      "importConfigSuccess": "Konfigurasi diimpor dari papan klip; masukkan kunci API lalu simpan.",
+      "importConfigInvalid": "Tidak ada konfigurasi di papan klip (gunakan Salin konfigurasi pada kartu).",
+      "importConfigFailed": "Gagal mengimpor dari papan klip: {{error}}",
+      "importConfigPlaceholder": "Gunakan Salin konfigurasi pada kartu lalu tempel isinya di sini",
+      "importConfigAction": "Impor konfigurasi",
+      "importConfigFromClipboard": "Baca papan klip"
     },
     "quickSwitch": {
       "action": "Alih cepat penyedia",
@@ -4075,8 +4109,6 @@
       "standardDesc": "Kecepatan bawaan, pemakaian normal",
       "fast": "Cepat",
       "fastDesc": "Kecepatan 1,5x, pemakaian lebih tinggi",
-      "ultrafast": "Sangat cepat",
-      "ultrafastDesc": "Respons tercepat, pemakaian lebih tinggi",
       "saveSuccess": "Kecepatan diperbarui",
       "saveFailed": "Gagal menyimpan kecepatan: {{error}}"
     },
@@ -4256,7 +4288,8 @@
         "reasoningEffort": "Intensitas penalaran",
         "reasoningEffortValue": "Nalar {{effort}}",
         "serviceTier": "Tingkat layanan",
-        "serviceTierValue": "Tingkat {{tier}}"
+        "serviceTierValue": "Tingkat {{tier}}",
+        "upstreamModel": "Model sebenarnya"
       },
       "timeouts": {
         "entryLabel": "Lanjutan",
@@ -4663,13 +4696,7 @@
     "oauthSuccessCloseNowLabel": "Close WebView​",
     "oauthSuccessCloseLaterLabel": "Later​",
     "oauthSuccessCloseNowStatus": "Ã¢Å“â€¦ Account added. Closing window...",
-    "oauthSuccessCloseLaterStatus": "Ã¢Å“â€¦ Account added. This WebView stays open.",
-    "sessions": {
-      "title": "File sesi lokal",
-      "desc": "File sesi lokal — Pindai lokal dan buka lokasi.",
-      "empty": "File sesi tidak ditemukan",
-      "open": "Buka lokasi"
-    }
+    "oauthSuccessCloseLaterStatus": "Ã¢Å“â€¦ Account added. This WebView stays open."
   },
   "githubCopilot": {
     "title": "Akun GitHub Copilot",
@@ -6048,7 +6075,7 @@
   "apiKeyFun": {
     "eyebrow": "Perantara",
     "title": "Relay APIKEY.FUN",
-    "description": "Relay mitra resmi Cockpit menyediakan akses API model besar yang stabil, terbuka, dan hemat biaya. Layanan ini mendukung model utama seperti Claude, OpenAI, dan Gemini, serta cocok untuk konfigurasi terpadu di Codex, Gemini CLI, Claude Code, dan alat pengembang lainnya. Dengan mendaftar melalui tautan eksklusif Cockpit, Anda bisa mendapatkan diskon isi ulang permanen hingga 5%.",
+    "description": "Relay mitra resmi Cockpit menyediakan akses API model besar yang stabil, terbuka, dan hemat biaya. Layanan ini mendukung model utama seperti Claude, ChatGPT, Grok, Gemini, Zhipu GLM, Kimi, dan DeepSeek, serta cocok untuk konfigurasi terpadu di Codex, Gemini CLI, Claude Code, dan alat pengembang lainnya. Dengan mendaftar melalui tautan eksklusif Cockpit, Anda bisa mendapatkan diskon isi ulang permanen hingga 5%.",
     "register": "Tautan eksklusif",
     "docs": "Dokumen resmi",
     "viewNow": "Lihat sekarang",
@@ -6160,13 +6187,34 @@
       "addToClaudeDesktop": "Tambah ke Claude",
       "addToClaudeCli": "Tambah ke Claude CLI",
       "codexShort": "Codex",
-      "claudeShort": "Claude CLI"
+      "claudeShort": "Claude CLI",
+      "deployToCodex": "Deploy cepat ke Codex",
+      "deploying": "Mengambil model…",
+      "deploySuccess": "Diterapkan ke Codex: {{count}} model",
+      "deployFailed": "Deployment gagal: {{error}}",
+      "useKey": "Gunakan kunci"
     },
     "prefill": {
       "claudeDesktopReady": "Konfigurasi APIKEY.FUN sudah terisi. Konfirmasi untuk menambahkannya ke Claude."
     },
     "copyKey": "Copy Key​",
-    "clearKey": "Clear input​"
+    "clearKey": "Clear input​",
+    "table": {
+      "name": "Nama",
+      "usage": "Penggunaan",
+      "status": "Kondisi",
+      "createdAt": "Ditambahkan",
+      "actions": "Tindakan",
+      "statusOk": "Tersedia",
+      "statusBad": "Galat",
+      "statusUnknown": "Belum diperiksa"
+    },
+    "config": {
+      "title": "Gunakan kunci API",
+      "family": "Grup",
+      "platform": "Sistem saat ini",
+      "unsupportedGroup": "Belum ada klien sekali klik untuk grup ini."
+    }
   },
   "grok": {
     "search": "Cari akun Grok CLI...",

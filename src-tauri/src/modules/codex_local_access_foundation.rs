@@ -226,7 +226,6 @@ fn resolve_internal_api_service_target(target: &str) -> Result<String, String> {
         _ => format!("/v1{}", upstream_path),
     })
 }
-
 #[cfg(test)]
 use tokio_tungstenite::client_async_tls_with_config;
 #[cfg(test)]
@@ -268,9 +267,11 @@ const CODEX_PROVIDER_MODEL_SHELL_POOL: &[&str] = &[
     "gpt-5.3-codex-spark",
     "gpt-5.2",
 ];
-// Keep Astra available as an identity-preserving shell when an upstream account
-// already exposes that exact model, without assigning it to unrelated overflow models.
-const CODEX_PROVIDER_IDENTITY_ONLY_MODEL_IDS: &[&str] = &["gpt-6-astra"];
+// Keep the GPT-6 family available as identity-preserving shells when an upstream
+// account already exposes those exact models, without assigning them to unrelated
+// overflow models.
+const CODEX_PROVIDER_IDENTITY_ONLY_MODEL_IDS: &[&str] =
+    &["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
 const CODEX_PROVIDER_GATEWAY_STATE_FILE: &str = "state.json";
 const CODEX_LOCAL_ACCESS_SIDECAR_CONFIG_FILE: &str = "config.json";
 const CODEX_LOCAL_ACCESS_SIDECAR_MANIFEST_FILE: &str = "manifest.json";
@@ -426,6 +427,8 @@ const CODEX_AUTO_REVIEW_MODEL_ID: &str = "codex-auto-review";
 /// 其它历史模型仍然可以路由，只是不再出现在客户端模型选择器里。
 const LOCAL_GATEWAY_VISIBLE_GPT_MODELS: &[(&str, &str)] = &[
     ("gpt-6-astra", "GPT-6 Astra"),
+    ("gpt-6-sol", "GPT-6 Sol"),
+    ("gpt-6-luna", "GPT-6 Luna"),
     ("gpt-5.6-sol", "GPT-5.6 Sol"),
     ("gpt-5.6-terra", "GPT-5.6 Terra"),
     ("gpt-5.6-luna", "GPT-5.6 Luna"),
@@ -2220,16 +2223,34 @@ fn trigger_sidecar_account_refresh_in_background(collection: CodexLocalAccessCol
     });
 }
 
-pub struct CodexOfficialWakeupChatResult {
-    pub account: CodexAccount,
-    pub reply: String,
-    pub duration_ms: u64,
-}
-
 struct CodexOfficialWakeupHttpResponse {
     account: CodexAccount,
     status: StatusCode,
     body: String,
+}
+
+/// API 直连唤醒使用的上游代理与超时配置：沿用用户已保存的 API 服务网络设置，
+/// 但只读取配置，不启动、也不依赖 API 服务进程。
+async fn official_wakeup_network_config() -> (Option<String>, CodexLocalAccessTimeouts) {
+    if let Err(err) = ensure_runtime_loaded_without_start().await {
+        logger::log_warn(&format!(
+            "[CodexWakeup] 加载 API 直连网络配置失败，使用默认网络配置: {}",
+            err
+        ));
+        return (None, CodexLocalAccessTimeouts::default());
+    }
+
+    let runtime = gateway_runtime().lock().await;
+    runtime
+        .collection
+        .as_ref()
+        .map(|collection| {
+            (
+                collection.upstream_proxy_url.clone(),
+                collection_timeouts(collection),
+            )
+        })
+        .unwrap_or_else(|| (None, CodexLocalAccessTimeouts::default()))
 }
 
 async fn send_agent_identity_wakeup_request_with_base_urls(
@@ -2302,22 +2323,29 @@ async fn send_agent_identity_wakeup_request_with_base_urls(
     Err("Agent Identity task 恢复后官方直连唤醒仍失败".to_string())
 }
 
+pub struct CodexOfficialWakeupChatResult {
+    pub account: CodexAccount,
+    pub reply: String,
+    pub duration_ms: u64,
+}
+
+/// API 直连唤醒：宿主带上所选账号凭据直接请求官方上游，不需要 Codex CLI，
+/// 也不经过本地 API 服务进程。
 pub async fn run_official_wakeup_chat(
     account_id: &str,
     model: Option<&str>,
     reasoning_effort: Option<&str>,
     prompt: &str,
 ) -> Result<CodexOfficialWakeupChatResult, String> {
-    let _internal_permit = acquire_internal_request_permit(account_id).await?;
     let account = get_prepared_account(account_id).await?;
     if account.is_api_key_auth() {
-        return Err("Codex 官方直连唤醒仅支持 OAuth 账号。".to_string());
+        return Err("Codex API 直连唤醒仅支持 OAuth / Agent Identity 账号。".to_string());
     }
 
     let model = model
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("gpt-5.4");
+        .unwrap_or(crate::modules::codex_wakeup::DEFAULT_WAKEUP_MODEL);
     let reasoning_effort = reasoning_effort
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -2352,7 +2380,7 @@ pub async fn run_official_wakeup_chat(
         "stream": true,
     });
     let body = serde_json::to_vec(&request_body)
-        .map_err(|e| format!("序列化官方直连唤醒请求失败: {}", e))?;
+        .map_err(|e| format!("序列化 API 直连唤醒请求失败: {}", e))?;
     let mut headers = HashMap::new();
     headers.insert("accept".to_string(), "text/event-stream".to_string());
     headers.insert("content-type".to_string(), "application/json".to_string());
@@ -2369,6 +2397,12 @@ pub async fn run_official_wakeup_chat(
         headers.insert("x-openai-fedramp".to_string(), "true".to_string());
     }
 
+    let (upstream_proxy_url, timeouts) = official_wakeup_network_config().await;
+    let upstream_connect_timeout = duration_from_millis(
+        timeouts.legacy_upstream_connect_timeout_ms,
+        DEFAULT_UPSTREAM_CONNECT_TIMEOUT,
+    );
+    let upstream_target = resolve_upstream_target(RESPONSES_PATH)?;
     let started_at = Instant::now();
     let format_transport_error = |err: String| {
         let detail = err
@@ -2377,40 +2411,67 @@ pub async fn run_official_wakeup_chat(
             .filter(|detail| !detail.is_empty())
             .unwrap_or(err.as_str());
         format!(
-            "Codex 官方服务暂时不可用，未能连接到所选账号的官方对话服务。请检查网络和代理配置。技术细节: {}",
+            "Codex API 直连暂时不可用，未能连接到所选账号的官方对话服务。请检查网络和代理配置。技术细节: {}",
             detail
         )
     };
-    let response = send_internal_api_service_request(
-        account_id,
-        RESPONSES_PATH,
-        &headers,
-        &body,
-        Duration::from_secs(15 * 60),
-    )
-    .await
-    .map_err(format_transport_error)?;
-    let status = response.status();
-    let body_text = response
-        .text()
+    let (account, status, body_text) = if account.is_agent_identity_auth() {
+        let response = send_agent_identity_wakeup_request_with_base_urls(
+            &account,
+            &upstream_target,
+            &headers,
+            &body,
+            upstream_proxy_url.as_deref(),
+            upstream_connect_timeout,
+            &timeouts,
+            UPSTREAM_CODEX_BASE_URL,
+            codex_agent_identity::AGENT_IDENTITY_AUTH_API_BASE_URL,
+        )
         .await
-        .map_err(|e| format!("读取 API 服务唤醒响应失败: {}", e))?;
+        .map_err(format_transport_error)?;
+        (
+            response.account,
+            response.status,
+            response.body,
+        )
+    } else {
+        let response = send_upstream_request(
+            "POST",
+            &upstream_target,
+            &headers,
+            &body,
+            &account,
+            upstream_proxy_url.as_deref(),
+            upstream_connect_timeout,
+            &timeouts,
+            CodexLocalAccessImageGenerationMode::Disabled,
+            CodexLocalAccessRequestKind::Text,
+        )
+        .await
+        .map_err(format_transport_error)?;
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .map_err(|e| format!("读取 API 直连唤醒响应失败: {}", e))?;
+        (account, status, body_text)
+    };
 
     if !status.is_success() {
         let message = extract_upstream_error_message(&body_text)
             .unwrap_or_else(|| truncate_diagnostic_text(body_text.trim(), 4000));
         return Err(format!(
-            "官方直连唤醒失败({}): {}",
+            "API 直连唤醒失败({}): {}",
             status.as_u16(),
             message
         ));
     }
 
     let response_body = parse_responses_payload_from_upstream(body_text.as_bytes())
-        .map_err(|e| format!("解析官方直连唤醒响应失败: {}", e))?;
+        .map_err(|e| format!("解析 API 直连唤醒响应失败: {}", e))?;
     let reply = extract_output_text_from_response(&response_body);
     if reply.trim().is_empty() {
-        return Err("官方直连唤醒未返回可读回复。".to_string());
+        return Err("API 直连唤醒未返回可读回复。".to_string());
     }
     if account.is_agent_identity_auth() {
         cache_prepared_account(&account).await;

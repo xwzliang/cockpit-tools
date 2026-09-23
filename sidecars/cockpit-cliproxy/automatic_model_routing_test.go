@@ -319,7 +319,7 @@ const trimmedAutomaticRoutingManifestPayload = `{
 		"modelRouting": {
 			"automatic": true,
 			"nativeModels": [
-				"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
+				"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",
 				"gpt-image-2.5", "codex-auto-review", "gpt-reserve"
 			],
 			"routableModels": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"],
@@ -354,7 +354,7 @@ func TestAutomaticRoutingListsOnlyRecommendedGptModels(t *testing.T) {
 		listed[strings.ToLower(model)] = true
 	}
 
-	for _, expected := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"} {
+	for _, expected := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"} {
 		if !listed[expected] {
 			t.Fatalf("推荐模型 %s 必须出现在模型列表里: %#v", expected, models)
 		}
@@ -366,6 +366,90 @@ func TestAutomaticRoutingListsOnlyRecommendedGptModels(t *testing.T) {
 	}
 	if !listed["deepseek-chat"] {
 		t.Fatalf("供应商模型必须保留: %#v", models)
+	}
+}
+
+const gptRelayAutomaticRoutingManifestPayload = `{
+	"modelIds": ["gpt-5.5", "grok-4.6"],
+	"accounts": [
+		{"id": "gpt-relay", "email": "relay@example.com", "upstreamApiKey": "sk-relay"},
+		{"id": "deepseek-relay", "email": "deepseek@example.com", "upstreamApiKey": "sk-deepseek"}
+	],
+	"apiKeys": [{
+		"id": "client",
+		"label": "Client",
+		"key": "client-key",
+		"enabled": true,
+		"accountIds": ["gpt-relay", "deepseek-relay"],
+		"allowedModels": [],
+		"excludedModels": [],
+		"modelRouting": {
+			"automatic": true,
+			"nativeModels": ["grok-4.6", "gpt-reserve"],
+			"routableModels": ["gpt-5.4-mini"],
+			"defaultRoute": "oauth",
+			"failurePolicy": "strict",
+			"routes": [{
+				"id": "auto-gpt-relay",
+				"namespace": "api-gpt-relay",
+				"providerAccountId": "gpt-relay",
+				"providerGateway": {
+					"baseUrl": "http://127.0.0.1:1/v1",
+					"apiKey": "sk-relay",
+					"upstreamModel": "gpt-5.5",
+					"upstreamModels": ["gpt-5.5"],
+					"wireApi": "chat_completions"
+				},
+				"models": [
+					{"clientModel": "gpt-5.5", "upstreamModel": "gpt-5.5"}
+				]
+			}, {
+				"id": "auto-deepseek-relay",
+				"namespace": "api-deepseek-relay",
+				"providerAccountId": "deepseek-relay",
+				"providerGateway": {
+					"baseUrl": "http://127.0.0.1:1/v1",
+					"apiKey": "sk-deepseek",
+					"upstreamModel": "deepseek-flash",
+					"upstreamModels": ["deepseek-flash"],
+					"wireApi": "responses"
+				},
+				"models": [
+					{"clientModel": "gpt-5.6-luna", "upstreamModel": "deepseek-flash"}
+				]
+			}]
+		}
+	}]
+}`
+
+// 第三方 GPT 中转账号（客户端名与上游名都是 GPT 家族）的模型要能出现在列表里并通过请求校验；
+// 壳位别名（客户端名是 GPT、上游是 deepseek-*）仍然只保留官方推荐集。
+func TestAutomaticRoutingListsGptRelayAccountModels(t *testing.T) {
+	m := loadAutomaticRoutingManifest(t, gptRelayAutomaticRoutingManifestPayload)
+	spec := m.apiKeyByValue["client-key"]
+	models := visibleModelsForAPIKey(m, spec)
+	listed := make(map[string]bool, len(models))
+	for _, model := range models {
+		listed[strings.ToLower(model)] = true
+	}
+
+	if !listed["gpt-5.5"] {
+		t.Fatalf("GPT 中转账号自己的模型必须保留: %#v", models)
+	}
+	if listed["gpt-5.6-luna"] {
+		t.Fatalf("壳位别名不应出现在模型列表里: %#v", models)
+	}
+	if !automaticClientModelVisible(m, spec, "gpt-5.5") {
+		t.Fatal("GPT 中转账号的模型必须通过请求校验")
+	}
+	if automaticClientModelVisible(m, spec, "gpt-5.6-luna") {
+		t.Fatal("壳位别名不应通过请求校验")
+	}
+
+	server := &relayServer{manifest: m}
+	candidates := server.automaticCandidates(spec, "gpt-5.5")
+	if len(candidates) != 1 || candidates[0].route.ProviderAccountID != "gpt-relay" {
+		t.Fatalf("GPT 中转模型必须路由到对应账号: %#v", candidates)
 	}
 }
 
@@ -407,6 +491,8 @@ func TestAutomaticRoutingStillAcceptsRoutableHistoryModels(t *testing.T) {
 func TestAutomaticRoutingUsesOfficialDisplayNames(t *testing.T) {
 	for model, want := range map[string]string{
 		"gpt-6-astra":   "GPT-6 Astra",
+		"gpt-6-sol":     "GPT-6 Sol",
+		"gpt-6-luna":    "GPT-6 Luna",
 		"gpt-5.6-sol":   "GPT-5.6 Sol",
 		"gpt-5.6-terra": "GPT-5.6 Terra",
 		"gpt-5.6-luna":  "GPT-5.6 Luna",
@@ -434,7 +520,7 @@ const deepseekAutomaticRoutingManifestPayload = `{
 		"excludedModels": [],
 		"modelRouting": {
 			"automatic": true,
-			"nativeModels": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-reserve"],
+			"nativeModels": ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-reserve"],
 			"routableModels": ["gpt-5.4", "gpt-5.4-mini"],
 			"defaultRoute": "oauth",
 			"failurePolicy": "strict",
@@ -587,6 +673,8 @@ func TestAutomaticRoutingPublishesRouteModelNamesAndReasoningLevels(t *testing.T
 	}
 	for slug, wantName := range map[string]string{
 		"gpt-6-astra":   "GPT-6 Astra",
+		"gpt-6-sol":     "GPT-6 Sol",
+		"gpt-6-luna":    "GPT-6 Luna",
 		"gpt-5.6-sol":   "GPT-5.6 Sol",
 		"gpt-5.6-terra": "GPT-5.6 Terra",
 		"gpt-5.6-luna":  "GPT-5.6 Luna",

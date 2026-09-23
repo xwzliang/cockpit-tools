@@ -86,6 +86,7 @@
     "viewError": "عرض الخطأ"
   },
   "common": {
+    "retry": "إعادة المحاولة",
     "quotaRefreshScheduler": {
       "busy": "قائمة التحديث ممتلئة. حاول بعد قليل.",
       "timeout": "انتهت مهلة تحديث الحصة. حاول مجددًا.",
@@ -364,7 +365,11 @@
     "deleteTagWarning": "هل أنت متأكد من حذف هذا الوسم من جميع الحسابات؟",
     "expand": "توسيع",
     "processing": "جارٍ المعالجة...",
-    "selectAll": "تحديد الكل"
+    "selectAll": "تحديد الكل",
+    "quota": {
+      "weeklyWindow": "أسبوع"
+    },
+    "optional": "(اختياري)"
   },
   "floatingCard": {
     "selectPlatform": "تبديل المنصة",
@@ -2239,10 +2244,18 @@
     "refreshAllSuccess": "اكتمل التحديث، نجح {{count}} حساب",
     "refreshAllPartialFailed": "اكتمل التحديث، نجح {{success}} / {{total}} حساب وفشل بعضها",
     "launchPreview": {
+      "configLoading": "جارٍ تحميل إعدادات النسخة…",
+      "configRefreshing": "جارٍ التحقق من إعدادات النسخة. تظل التفاصيل الحالية متاحة.",
+      "configLoadTimeout": "انتهت مهلة تحميل إعدادات النسخة. يرجى إعادة المحاولة.",
+      "configChanged": "تغيّرت إعدادات النسخة في موضع آخر. أعد تحميلها قبل الحفظ أو التشغيل.",
       "accessModeTitle": "وضع التشغيل",
       "prosLabel": "المزايا:",
       "consLabel": "العيوب:",
-      "accessModeDescription": "اختر طريقة تشغيل DeepSeek؛ تختلف الأوضاع في تبديل النموذج وOAuth وتحويل توليد الصور.",
+      "accessModeDescription": "اختر طريقة تشغيل هذا المزوّد؛ تختلف الأوضاع في تبديل الطرز وOAuth وتمرير توليد الصور.",
+      "accessModeApiServiceFixed": "تستخدم خدمة API دائماً وضع البوابة، ولا يمكن تغييره.",
+      "imageGenApiServiceFixed": "تُدار إعادة توجيه توليد الصور في خدمة API من «خدمة API ← الإعدادات»؛ وهنا تُعرض الحالة الحالية فقط.",
+      "oauthBindingApiServiceHint": "يُدار ربط OAuth في خدمة API من «خدمة API ← الإعدادات»؛ وهنا تُعرض حالة المدخل فقط.",
+      "oauthBindingApiServiceManaged": "يُدار عبر مجموعة حسابات خدمة API",
       "accessModeGatewayPros": "1: تبديل النموذج داخل Codex\n2: ربط حسابات OAuth واستخدام ميزات OAuth مثل الضغط عن بُعد والتحكم بالمتصفح\n3: إعداد حسابات GPT لتحويل توليد الصور",
       "accessModeGatewayCons": "1: يتطلب البوابة المحلية للمثيل، لذا أبطأ قليلًا من الاتصال المباشر",
       "accessModeDirectPros": "1: بدون بوابة، وهو الأسرع",
@@ -2674,6 +2687,8 @@
       "requestLogSuccess": "نجح",
       "requestLogFailed": "فشل",
       "requestLogTokens": "{{value}} رموز",
+      "imageForwardLabel": "تفعيل توليد الصور عبر GPT",
+      "imageForwardHint": "بعد التفعيل اختر حسابات GPT: تُنفَّذ طلبات توليد الصور وتحريرها على الحسابات المحددة وتستهلك حصتها، بينما تظل طلبات المحادثة تُوجَّه عبر مجموعة الحسابات.",
       "imageGenerationMode": {
         "enabled": "مفعّل",
         "imagesOnly": "للصور فقط",
@@ -2743,7 +2758,8 @@
           "recover": "استعادة",
           "recovering": "جارٍ الاستعادة…",
           "recoverAll": "استعادة الكل",
-          "resyncPool": "إعادة مزامنة مجموعة الحسابات"
+          "resyncPool": "إعادة مزامنة مجموعة الحسابات",
+          "reauthorizeHint": "بيانات اعتماد الحساب لم تعد صالحة؛ أعد التفويض عبر تسجيل الدخول الرسمي. إعادة ضبط الجدولة وحدها لا تصلح ذلك."
         }
       },
       "testChatModel": "النموذج",
@@ -2837,6 +2853,7 @@
       "resetCreditGrantedAt": "مُنحت",
       "resetCreditExpiresAt": "تنتهي",
       "windowAccountCostHint": "فوترة الحساب (تقدير حسب أسعار النموذج)",
+      "windowEstimatedFullCostHint": "محتسبة من الاستخدام الحالي: تكلفة الحساب عند امتلاء هذه النافذة بالكامل",
       "windowUserCostHint": "فوترة المستخدم",
       "windowWeeks": "حصة {{count}} أسابيع",
       "windowDays": "حصة {{count}} أيام",
@@ -2931,7 +2948,7 @@
       "heroSubtitle": "أنشئ مهام إيقاظ مجدولة لحسابات Codex عبر OAuth، وشغّل اختبارات فورية، وراجع كل عملية تشغيل في مكان واحد.",
       "runtimeReady": "Codex CLI جاهز",
       "runtimeMissing": "يلزم Codex CLI",
-      "runtimeCardTitle": "واجهة Codex CLI",
+      "runtimeCardTitle": "طريقة التنفيذ",
       "runtimeUnknownPath": "لم يتم اكتشاف المسار",
       "runtimeUnchecked": "أعد الفحص لجلب أحدث حالة",
       "runtimeVersion": "الإصدار {{version}}",
@@ -3110,11 +3127,7 @@
       "runtimeConfigCodexCliPlaceholder": "مثال: /opt/homebrew/bin/codex",
       "runtimeConfigNodeLabel": "مسار node",
       "runtimeConfigNodePlaceholder": "مثال: /opt/homebrew/bin/node",
-      "runtimeConfigApplyHint": "بعد التعديل، انقر \"إعادة فحص CLI\" للحفظ والتطبيق فورًا.",
-      "officialChatRuntimeTitle": "اتصال رسمي مباشر",
-      "officialChatRuntimePath": "دردشة Codex الرسمية من ChatGPT",
-      "officialChatRuntimeSource": "اتصال رسمي مباشر",
-      "officialChatRuntimeMessage": "محادثة مباشرة بحساب OAuth"
+      "runtimeConfigApplyHint": "بعد التعديل، انقر \"إعادة فحص CLI\" للحفظ والتطبيق فورًا."
     },
     "sessionManager": {
       "title": "إدارة الجلسات",
@@ -3606,6 +3619,13 @@
       }
     },
     "modelProviders": {
+      "keyModels": {
+        "title": "نماذج المفتاح",
+        "override": "إعداد مستقل",
+        "help": "عند التعطيل، تُستخدم إعدادات نماذج المزوّد. عند التفعيل، يستخدم هذا المفتاح وحده دليلًا وقدرات مستقلة.",
+        "saved": "حُفظت إعدادات نماذج المفتاح. أعد تشغيل تطبيقات العميل المفتوحة لتطبيقها.",
+        "inherit": "اتباع المزوّد"
+      },
       "tab": "موفرو النماذج",
       "desc": "أدر موفري النماذج وعدة مفاتيح API في مكان واحد، ثم أعد استخدامها مباشرة عند إضافة حسابات Codex بمفتاح API.",
       "add": "إضافة مزوّد",
@@ -3614,6 +3634,7 @@
       "emptyTitle": "لا يوجد موفرو نماذج بعد",
       "emptyDesc": "انقر على \"إضافة مزوّد\" في أعلى اليمين للبدء.",
       "baseUrl": "عنوان URL الأساسي",
+      "customEndpointHint": "يُستخدم نقطة نهاية مخصصة: هذا العنوان ليس نقطة النهاية الرسمية لـ «{{preset}}». ستُعامَل كنقطة نهاية متوافقة من طرف ثالث؛ اضبط البروتوكول وقائمة الطرز حسب المصدر.",
       "modelCatalog": "النماذج",
       "modelCatalogEmpty": "لا يوجد كتالوج نماذج",
       "gatewayHint": "تبدأ موفرو الطرف الثالث عبر البوابة المحلية لعزل المثيل وتحويل البروتوكول. يبقى موفرو OpenAI الرسميون باتصال مباشر.",
@@ -3624,6 +3645,8 @@
       "unnamedKey": "مفتاح بلا اسم",
       "createTitle": "إضافة مزوّد نموذج",
       "editTitle": "تعديل مزوّد النموذج",
+      "copySuffix": "نسخة",
+      "duplicate": "نسخ المزوّد (نسخة جديدة بلا مفتاح)",
       "existingApiKeys": "مفاتيح API الحالية",
       "fields": {
         "name": "اسم المزوّد",
@@ -3672,7 +3695,8 @@
         "responses": "Responses أصلي",
         "chatCompletions": "بروتوكول Chat Completions",
         "deepseekResponsesHint": "ابدأ DeepSeek لاختيار البوابة أو الاتصال المباشر الرسمي، ثم اختر Flash أو Pro. تعرض البوابة النماذج في Codex؛ والاتصال المباشر يتجاوز البوابة.",
-        "deepseekChatHint": "يستخدم DeepSeek Chat Completions جسر البوابة المحلية للمسارات القديمة. اختر Responses عندما تحتاج إلى سلوك أدوات Codex الرسمي."
+        "deepseekChatHint": "يستخدم DeepSeek Chat Completions جسر البوابة المحلية للمسارات القديمة. اختر Responses عندما تحتاج إلى سلوك أدوات Codex الرسمي.",
+        "deepseekThirdPartyHint": "هذا العنوان ليس نقطة نهاية رسمية لـ DeepSeek، لذا ستُعامَل كنقطة نهاية متوافقة من طرف ثالث؛ أدخل معرّفات الطرز الفعلية من المصدر بدل أسماء الطرز الرسمية."
       },
       "selectSavedProvider": "المزوّدون المحفوظون",
       "selectSavedApiKey": "مفاتيح API المحفوظة",
@@ -3894,7 +3918,17 @@
       "renameApiKeyPrompt": "إعادة تسمية مفتاح API",
       "renameApiKeySuccess": "تمت إعادة تسمية مفتاح API",
       "renameApiKeyFailed": "فشل إعادة تسمية مفتاح API: {{error}}",
-      "existingApiKeysSearch": "بحث عن مفاتيح API…"
+      "existingApiKeysSearch": "بحث عن مفاتيح API…",
+      "copyConfig": "نسخ الإعداد (بدون مفتاح)",
+      "copyConfigSuccess": "تم نسخ إعداد المزوّد بدون مفتاح API؛ الصقه عند إضافة مزوّد.",
+      "copyConfigFailed": "تعذّر نسخ الإعداد: {{error}}",
+      "importConfig": "استيراد الإعداد من الحافظة",
+      "importConfigSuccess": "تم استيراد الإعداد من الحافظة؛ أدخل مفتاح API ثم احفظ.",
+      "importConfigInvalid": "لا يوجد إعداد في الحافظة (استخدم «نسخ الإعداد» على البطاقة).",
+      "importConfigFailed": "تعذّر الاستيراد من الحافظة: {{error}}",
+      "importConfigPlaceholder": "استخدم «نسخ الإعداد» على البطاقة ثم الصق المحتوى هنا",
+      "importConfigAction": "استيراد الإعداد",
+      "importConfigFromClipboard": "قراءة الحافظة"
     },
     "quickSwitch": {
       "action": "تبديل المزوّد سريعًا",
@@ -4075,8 +4109,6 @@
       "standardDesc": "السرعة الافتراضية، استخدام عادي",
       "fast": "سريع",
       "fastDesc": "سرعة 1.5x، استخدام أعلى",
-      "ultrafast": "فائق السرعة",
-      "ultrafastDesc": "أسرع الاستجابات، استخدام أعلى",
       "saveSuccess": "تم تحديث السرعة",
       "saveFailed": "فشل حفظ السرعة: {{error}}"
     },
@@ -4256,7 +4288,8 @@
         "reasoningEffort": "شدة التفكير",
         "reasoningEffortValue": "تفكير {{effort}}",
         "serviceTier": "مستوى الخدمة",
-        "serviceTierValue": "مستوى {{tier}}"
+        "serviceTierValue": "مستوى {{tier}}",
+        "upstreamModel": "النموذج الفعلي"
       },
       "timeouts": {
         "entryLabel": "متقدم",
@@ -5498,12 +5531,6 @@
     },
     "quota": {
       "usedOfTotal": "{{used}} / {{total}}​"
-    },
-    "sessions": {
-      "title": "ملفات الجلسة المحلية",
-      "desc": "ملفات الجلسة المحلية — مسح محلي وفتح الموقع.",
-      "empty": "لا ملفات جلسة",
-      "open": "فتح الموقع"
     }
   },
   "qoder": {
@@ -6048,7 +6075,7 @@
   "apiKeyFun": {
     "eyebrow": "وسيط",
     "title": "ترحيل APIKEY.FUN",
-    "description": "وسيط Cockpit الشريك الرسمي يوفر وصولًا مستقرًا ومفتوحًا وعالي الكفاءة من حيث التكلفة إلى واجهات API للنماذج الكبيرة. يدعم نماذج رئيسية مثل Claude وOpenAI وGemini، وهو مناسب للتكوين الموحد في Codex وGemini CLI وClaude Code وأدوات التطوير الأخرى. عند التسجيل عبر رابط Cockpit الحصري، يمكنك الحصول على خصم دائم يصل إلى 5% على عمليات الشحن.",
+    "description": "وسيط Cockpit الشريك الرسمي يوفر وصولًا مستقرًا ومفتوحًا وعالي الكفاءة من حيث التكلفة إلى واجهات API للنماذج الكبيرة. يدعم نماذج رئيسية مثل Claude وChatGPT وGrok وGemini وZhipu GLM وKimi وDeepSeek، وهو مناسب للتكوين الموحد في Codex وGemini CLI وClaude Code وأدوات التطوير الأخرى. عند التسجيل عبر رابط Cockpit الحصري، يمكنك الحصول على خصم دائم يصل إلى 5% على عمليات الشحن.",
     "register": "رابط تسجيل حصري",
     "docs": "الوثائق الرسمية",
     "viewNow": "اعرض الآن",
@@ -6160,13 +6187,34 @@
       "addToClaudeDesktop": "إضافة إلى Claude",
       "addToClaudeCli": "إضافة إلى Claude CLI",
       "codexShort": "Codex",
-      "claudeShort": "Claude CLI"
+      "claudeShort": "Claude CLI",
+      "deployToCodex": "نشر سريع إلى Codex",
+      "deploying": "جارٍ جلب الطرز…",
+      "deploySuccess": "تم النشر إلى Codex: {{count}} طراز",
+      "deployFailed": "فشل النشر: {{error}}",
+      "useKey": "استخدام المفتاح"
     },
     "prefill": {
       "claudeDesktopReady": "تمت تعبئة إعدادات APIKEY.FUN. أكّد الإضافة إلى Claude."
     },
     "copyKey": "Copy Key​",
-    "clearKey": "Clear input​"
+    "clearKey": "Clear input​",
+    "table": {
+      "name": "الاسم",
+      "usage": "الاستخدام",
+      "status": "الحالة",
+      "createdAt": "أُضيف",
+      "actions": "الإجراءات",
+      "statusOk": "متاح",
+      "statusBad": "خطأ",
+      "statusUnknown": "لم يُفحص"
+    },
+    "config": {
+      "title": "استخدام مفتاح API",
+      "family": "المجموعة",
+      "platform": "النظام الحالي",
+      "unsupportedGroup": "لا تتوفر عملاء بنقرة واحدة لهذه المجموعة بعد."
+    }
   },
   "grok": {
     "search": "البحث في حسابات Grok CLI...",

@@ -329,6 +329,7 @@ pub fn run() {
     }
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
@@ -409,6 +410,18 @@ pub fn run() {
                     logger::log_info(&format!(
                         "[Codex模型目录] 已按新默认关闭历史模型管理: profiles={}",
                         migrated
+                    ));
+                }
+            });
+
+            // 受管模型目录版本校验：升级后旧目录（没有版本戳或版本落后）在后台按当前
+            // 生成逻辑重建一次，避免用户不切号就一直在用旧的能力声明。
+            std::thread::spawn(|| {
+                let rebuilt = modules::codex_account::rebuild_stale_managed_model_catalogs();
+                if rebuilt > 0 {
+                    logger::log_info(&format!(
+                        "[Codex模型目录] 启动校验已重建落后模型目录: profiles={}",
+                        rebuilt
                     ));
                 }
             });
@@ -905,7 +918,6 @@ pub fn run() {
             commands::system::codex_ssh_test_connection,
             commands::system::codex_ssh_sync_current,
             commands::system::codex_managed_lb_provider_id,
-            commands::system::codebuddy_list_local_session_files,
             commands::system::save_refresh_interval_config,
             commands::system::save_tray_platform_layout,
             commands::system::set_app_path,
@@ -1114,6 +1126,7 @@ pub fn run() {
             commands::codex::codex_local_access_update_gateway_mode,
             commands::codex::codex_local_access_update_debug_logs,
             commands::codex::codex_local_access_update_image_generation_model,
+            commands::codex::codex_local_access_update_image_generation_accounts,
             commands::codex::codex_local_access_update_access_scope,
             commands::codex::codex_local_access_update_client_base_url_host,
             commands::codex::codex_local_access_create_api_key,

@@ -86,6 +86,7 @@
     "viewError": "Показать ошибку"
   },
   "common": {
+    "retry": "Повторить",
     "quotaRefreshScheduler": {
       "busy": "Очередь обновления заполнена. Повторите попытку чуть позже.",
       "timeout": "Время обновления квоты истекло. Повторите попытку.",
@@ -364,7 +365,11 @@
     "deleteTagWarning": "Вы уверены, что хотите удалить этот тег со всех аккаунтов?",
     "expand": "Развернуть",
     "processing": "Обработка...",
-    "selectAll": "Выбрать всё"
+    "selectAll": "Выбрать всё",
+    "quota": {
+      "weeklyWindow": "Неделя"
+    },
+    "optional": " (необязательно)"
   },
   "nav": {
     "overview": "Antigravity IDE​",
@@ -2192,10 +2197,18 @@
     "refreshAllSuccess": "Обновление завершено, успешно: {{count}} аккаунт(ов)",
     "refreshAllPartialFailed": "Обновление завершено, успешно: {{success}} / {{total}}, часть с ошибками",
     "launchPreview": {
+      "configLoading": "Загрузка настроек экземпляра…",
+      "configRefreshing": "Проверка настроек экземпляра. Текущие данные остаются доступны.",
+      "configLoadTimeout": "Истекло время загрузки настроек экземпляра. Повторите попытку.",
+      "configChanged": "Настройки экземпляра изменены в другом месте. Перезагрузите их перед сохранением или запуском.",
       "accessModeTitle": "Режим запуска",
       "prosLabel": "Плюсы:",
       "consLabel": "Минусы:",
-      "accessModeDescription": "Выберите, как запускать DeepSeek; режимы различаются по смене модели, OAuth и пересылке генерации изображений.",
+      "accessModeDescription": "Выберите способ запуска этого поставщика; режимы различаются переключением моделей, OAuth и перенаправлением генерации изображений.",
+      "accessModeApiServiceFixed": "Служба API всегда использует режим шлюза; изменить нельзя.",
+      "imageGenApiServiceFixed": "Перенаправление генерации изображений в службе API настраивается в «Служба API → Настройки»; здесь показано только текущее состояние.",
+      "oauthBindingApiServiceHint": "Привязка OAuth в службе API настраивается в «Служба API → Настройки»; здесь показано только состояние входа.",
+      "oauthBindingApiServiceManaged": "Управляется пулом аккаунтов службы API",
       "accessModeGatewayPros": "1: Смена модели внутри Codex\n2: Привязка OAuth-аккаунтов и функции OAuth, такие как удалённое сжатие и управление браузером\n3: Настройка GPT-аккаунтов для пересылки генерации изображений",
       "accessModeGatewayCons": "1: Требуется локальный шлюз экземпляра, поэтому немного медленнее прямого подключения",
       "accessModeDirectPros": "1: Без шлюза, самый быстрый вариант",
@@ -2627,6 +2640,8 @@
       "requestLogSuccess": "Успех",
       "requestLogFailed": "Ошибка",
       "requestLogTokens": "{{value}} токенов",
+      "imageForwardLabel": "Включить генерацию изображений GPT",
+      "imageForwardHint": "После включения выберите аккаунты GPT: запросы генерации и редактирования изображений выполняются на выбранных аккаунтах и расходуют их лимит, а чат по-прежнему использует пул аккаунтов.",
       "imageGenerationMode": {
         "enabled": "Включено",
         "imagesOnly": "Только изображения",
@@ -2696,7 +2711,8 @@
           "recover": "Восстановить",
           "recovering": "Восстановление…",
           "recoverAll": "Восстановить все",
-          "resyncPool": "Повторно синхронизировать пул"
+          "resyncPool": "Повторно синхронизировать пул",
+          "reauthorizeHint": "Учётные данные аккаунта больше не действительны. Войдите заново через официальный вход; сброс планировщика это не исправит."
         }
       },
       "testChatModel": "Модель",
@@ -2790,6 +2806,7 @@
       "resetCreditGrantedAt": "Выдано",
       "resetCreditExpiresAt": "Истекает",
       "windowAccountCostHint": "Счёт аккаунта (оценка по ценам модели)",
+      "windowEstimatedFullCostHint": "Пересчёт по текущему расходу: стоимость для аккаунта при полном исчерпании окна",
       "windowUserCostHint": "Счёт пользователя",
       "windowWeeks": "Квота {{count}} нед.",
       "windowDays": "Квота {{count}} дн.",
@@ -2884,7 +2901,7 @@
       "heroSubtitle": "Создавайте задачи пробуждения по расписанию для OAuth-аккаунтов Codex, запускайте быстрые тесты и просматривайте все срабатывания в одном месте.",
       "runtimeReady": "Codex CLI готов",
       "runtimeMissing": "Требуется Codex CLI",
-      "runtimeCardTitle": "CLI Codex",
+      "runtimeCardTitle": "Способ выполнения",
       "runtimeUnknownPath": "Путь не найден",
       "runtimeUnchecked": "Повторно проверьте, чтобы получить актуальный статус",
       "runtimeVersion": "Версия {{version}}",
@@ -3063,11 +3080,7 @@
       "runtimeConfigCodexCliPlaceholder": "например: /opt/homebrew/bin/codex",
       "runtimeConfigNodeLabel": "Путь к node",
       "runtimeConfigNodePlaceholder": "например: /opt/homebrew/bin/node",
-      "runtimeConfigApplyHint": "После изменения нажмите «Проверить CLI снова», чтобы сразу сохранить и применить.",
-      "officialChatRuntimeTitle": "Официально напрямую",
-      "officialChatRuntimePath": "Официальный чат Codex в ChatGPT",
-      "officialChatRuntimeSource": "Официально напрямую",
-      "officialChatRuntimeMessage": "Прямой чат через OAuth-аккаунт"
+      "runtimeConfigApplyHint": "После изменения нажмите «Проверить CLI снова», чтобы сразу сохранить и применить."
     },
     "sessionManager": {
       "title": "Управление сессиями",
@@ -3559,6 +3572,13 @@
       }
     },
     "modelProviders": {
+      "keyModels": {
+        "title": "Модели ключа",
+        "override": "Свои настройки",
+        "help": "Если выключено, используются настройки моделей провайдера. Если включено, только этот ключ использует собственный каталог и возможности.",
+        "saved": "Настройки моделей ключа сохранены. Перезапустите работающие клиенты, чтобы применить их.",
+        "inherit": "От провайдера"
+      },
       "tab": "Провайдеры моделей",
       "desc": "Управляйте провайдерами моделей и несколькими ключами API в одном месте, а затем напрямую переиспользуйте их при добавлении аккаунтов Codex с API key.",
       "add": "Добавить провайдера",
@@ -3567,6 +3587,7 @@
       "emptyTitle": "Провайдеров моделей пока нет",
       "emptyDesc": "Нажмите «Добавить провайдера» в правом верхнем углу, чтобы начать.",
       "baseUrl": "Базовый URL",
+      "customEndpointHint": "Используется пользовательская конечная точка: этот адрес не является официальной конечной точкой «{{preset}}». Он будет обрабатываться как совместимая точка стороннего поставщика; настройте протокол и каталог моделей по upstream.",
       "modelCatalog": "Модели",
       "modelCatalogEmpty": "Нет каталога моделей",
       "gatewayHint": "Сторонние поставщики запускаются через локальный шлюз для изоляции экземпляра и преобразования протокола. Официальные поставщики OpenAI остаются прямыми.",
@@ -3577,6 +3598,8 @@
       "unnamedKey": "Ключ без имени",
       "createTitle": "Добавить провайдера модели",
       "editTitle": "Изменить провайдера модели",
+      "copySuffix": "Копия",
+      "duplicate": "Дублировать провайдера (новая копия без ключа)",
       "existingApiKeys": "Существующие ключи API",
       "fields": {
         "name": "Название провайдера",
@@ -3625,7 +3648,8 @@
         "responses": "Responses native",
         "chatCompletions": "Протокол Chat Completions",
         "deepseekResponsesHint": "Запустите DeepSeek, чтобы выбрать шлюз или официальное прямое подключение, затем выберите Flash или Pro. Шлюз показывает модели в Codex; прямое подключение обходит шлюз.",
-        "deepseekChatHint": "DeepSeek Chat Completions использует локальный мост шлюза для старых путей. Выберите Responses, если нужен официальный режим инструментов Codex."
+        "deepseekChatHint": "DeepSeek Chat Completions использует локальный мост шлюза для старых путей. Выберите Responses, если нужен официальный режим инструментов Codex.",
+        "deepseekThirdPartyHint": "Этот адрес не является официальной конечной точкой DeepSeek: он будет обрабатываться как совместимая точка стороннего поставщика; в каталоге моделей указывайте реальные ID моделей upstream, а не официальные названия."
       },
       "selectSavedProvider": "Сохранённые провайдеры",
       "selectSavedApiKey": "Сохранённые ключи API",
@@ -3847,7 +3871,17 @@
       "renameApiKeyPrompt": "Переименовать API key",
       "renameApiKeySuccess": "API key переименован",
       "renameApiKeyFailed": "Не удалось переименовать API key: {{error}}",
-      "existingApiKeysSearch": "Поиск API Key…"
+      "existingApiKeysSearch": "Поиск API Key…",
+      "copyConfig": "Копировать конфигурацию (без ключа)",
+      "copyConfigSuccess": "Конфигурация поставщика скопирована без API-ключа; вставьте её при добавлении поставщика.",
+      "copyConfigFailed": "Не удалось скопировать конфигурацию: {{error}}",
+      "importConfig": "Импортировать конфигурацию из буфера обмена",
+      "importConfigSuccess": "Конфигурация импортирована из буфера обмена; укажите API-ключ и сохраните.",
+      "importConfigInvalid": "В буфере обмена нет конфигурации (используйте «Копировать конфигурацию» на карточке).",
+      "importConfigFailed": "Не удалось импортировать из буфера обмена: {{error}}",
+      "importConfigPlaceholder": "Нажмите «Копировать конфигурацию» на карточке и вставьте содержимое здесь",
+      "importConfigAction": "Импортировать конфигурацию",
+      "importConfigFromClipboard": "Читать буфер обмена"
     },
     "quickSwitch": {
       "action": "Быстрое переключение провайдера",
@@ -4028,8 +4062,6 @@
       "standardDesc": "Скорость по умолчанию, обычный расход",
       "fast": "Быстрая",
       "fastDesc": "Скорость 1,5x, расход выше",
-      "ultrafast": "Сверхбыстрая",
-      "ultrafastDesc": "Самые быстрые ответы, расход выше",
       "saveSuccess": "Скорость обновлена",
       "saveFailed": "Не удалось сохранить скорость: {{error}}"
     },
@@ -4209,7 +4241,8 @@
         "reasoningEffort": "Рассуждение",
         "reasoningEffortValue": "Расс. {{effort}}",
         "serviceTier": "Уровень сервиса",
-        "serviceTierValue": "Уровень {{tier}}"
+        "serviceTierValue": "Уровень {{tier}}",
+        "upstreamModel": "Фактическая модель"
       },
       "timeouts": {
         "entryLabel": "Дополнительно",
@@ -5451,12 +5484,6 @@
     },
     "quota": {
       "usedOfTotal": "{{used}} / {{total}}​"
-    },
-    "sessions": {
-      "title": "Локальные файлы сессий",
-      "desc": "Локальные файлы сессий — Локальное сканирование и открытие папки.",
-      "empty": "Файлы сессий не найдены",
-      "open": "Открыть папку"
     }
   },
   "qoder": {
@@ -6048,7 +6075,7 @@
   "apiKeyFun": {
     "eyebrow": "Шлюз",
     "title": "Relay APIKEY.FUN",
-    "description": "Официальный партнерский relay Cockpit предоставляет стабильный, открытый и выгодный API-доступ к большим моделям. Поддерживаются Claude, OpenAI, Gemini и другие основные модели; сервис подходит для единой настройки в Codex, Gemini CLI, Claude Code и других инструментах разработки. При регистрации по эксклюзивной ссылке Cockpit можно получить постоянную скидку до 5% на пополнения.",
+    "description": "Официальный партнерский relay Cockpit предоставляет стабильный, открытый и выгодный API-доступ к большим моделям. Поддерживаются Claude, ChatGPT, Grok, Gemini, Zhipu GLM, Kimi, DeepSeek и другие основные модели; сервис подходит для единой настройки в Codex, Gemini CLI, Claude Code и других инструментах разработки. При регистрации по эксклюзивной ссылке Cockpit можно получить постоянную скидку до 5% на пополнения.",
     "register": "Эксклюзивная ссылка",
     "docs": "Официальная документация",
     "viewNow": "Смотреть",
@@ -6160,13 +6187,34 @@
       "addToClaudeDesktop": "В Claude",
       "addToClaudeCli": "В Claude CLI",
       "codexShort": "Codex",
-      "claudeShort": "Claude CLI"
+      "claudeShort": "Claude CLI",
+      "deployToCodex": "Быстрое развёртывание в Codex",
+      "deploying": "Получаем модели…",
+      "deploySuccess": "Развёрнуто в Codex: {{count}} моделей",
+      "deployFailed": "Развёртывание не удалось: {{error}}",
+      "useKey": "Использовать ключ"
     },
     "prefill": {
       "claudeDesktopReady": "Настройки APIKEY.FUN заполнены. Подтвердите добавление в Claude."
     },
     "copyKey": "Copy Key​",
-    "clearKey": "Clear input​"
+    "clearKey": "Clear input​",
+    "table": {
+      "name": "Имя",
+      "usage": "Использование",
+      "status": "Статус",
+      "createdAt": "Добавлено",
+      "actions": "Действия",
+      "statusOk": "Доступен",
+      "statusBad": "Ошибка",
+      "statusUnknown": "Не проверено"
+    },
+    "config": {
+      "title": "Использовать API-ключ",
+      "family": "Группа",
+      "platform": "Текущая система",
+      "unsupportedGroup": "Для этой группы пока нет клиентов с записью в один клик."
+    }
   },
   "grok": {
     "search": "Поиск аккаунтов Grok CLI...",

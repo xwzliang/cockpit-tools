@@ -4,6 +4,8 @@ import { ModalErrorMessage } from "../components/ModalErrorMessage";
 import { MfaQuickCodeSelect } from "../components/MfaQuickCodeSelect";
 import { SingleSelectDropdown } from "../components/SingleSelectDropdown";
 import { useEscCloseTopmost } from "../hooks/useEscClose";
+import { useModalScrollLock } from "../hooks/useModalScrollLock";
+import "./CodexAccountDialogs.css";
 import { CODEX_TEMP_LOGIN_STEPS } from "../services/codexTempLoginService";
 import { CODEX_API_PROVIDER_CUSTOM_ID, CODEX_API_PROVIDER_PRESETS, COCKPIT_API_PROVIDER_ID } from "../utils/codexProviderPresets";
 import type { CodexAccountsViewProps } from "./CodexAccountsView";
@@ -134,6 +136,7 @@ export function CodexAddAccountDialog(props: CodexAccountsViewProps) {
     Boolean(localImportInstances),
     handleCloseLocalImportInstancePicker,
   );
+  useModalScrollLock(Boolean(showAddModal));
   // 官方登录进行中时，ESC 先取消登录再关闭弹框，避免留下无人接管的临时 profile。
   useEscCloseTopmost(tempLoginRunning, () => {
     void handleCancelCodexTempLogin();
@@ -142,9 +145,9 @@ export function CodexAddAccountDialog(props: CodexAccountsViewProps) {
   return showAddModal &&
             createPortal(
               <>
-                <div className="modal-overlay">
+                <div className="modal-overlay codex-account-dialog-overlay">
                 <div
-                  className="modal-content codex-add-modal codex-account-add-modal platform-account-add-modal codex-provider-modal"
+                  className="modal-content codex-add-modal codex-account-add-modal codex-provider-modal codex-account-dialog"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="modal-header">
@@ -230,6 +233,54 @@ export function CodexAddAccountDialog(props: CodexAccountsViewProps) {
                             group: codexAddTargetGroup.name,
                           })}
                         </span>
+                      </div>
+                    )}
+                    {reauthTargetAccount && (
+                      <div className="codex-reauth-target-summary">
+                        {reauthTargetEmail && (
+                          <div className="oauth-link codex-reauth-email-block">
+                            <label>
+                              {t(
+                                "codex.oauth.reauthEmailLabel",
+                                "本次重新授权账号",
+                              )}
+                            </label>
+                            <div className="oauth-url-box">
+                              <input
+                                type="text"
+                                value={reauthTargetEmail}
+                                readOnly
+                                aria-label={t(
+                                  "codex.oauth.reauthEmailLabel",
+                                  "本次重新授权账号",
+                                )}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyReauthEmail()}
+                                title={
+                                  reauthEmailCopied
+                                    ? t("common.copied", "已复制")
+                                    : t("common.copy", "复制")
+                                }
+                                aria-label={
+                                  reauthEmailCopied
+                                    ? t("common.copied", "已复制")
+                                    : t("common.copy", "复制")
+                                }
+                              >
+                                {reauthEmailCopied ? (
+                                  <Check size={16} />
+                                ) : (
+                                  <Copy size={16} />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        <div className="codex-reauth-note-summary">
+                          {renderAccountNoteButton(reauthTargetAccount)}
+                        </div>
                       </div>
                     )}
                     {addTab !== "oauth" && <MfaQuickCodeSelect />}
@@ -399,52 +450,6 @@ export function CodexAddAccountDialog(props: CodexAccountsViewProps) {
                     )}
                     {addTab === "oauth" && (
                       <div className="add-section">
-                        {reauthTargetEmail && (
-                          <div className="oauth-link codex-reauth-email-block">
-                            <label>
-                              {t(
-                                "codex.oauth.reauthEmailLabel",
-                                "本次重新授权账号",
-                              )}
-                            </label>
-                            <div className="oauth-url-box">
-                              <input
-                                type="text"
-                                value={reauthTargetEmail}
-                                readOnly
-                                aria-label={t(
-                                  "codex.oauth.reauthEmailLabel",
-                                  "本次重新授权账号",
-                                )}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => void handleCopyReauthEmail()}
-                                title={
-                                  reauthEmailCopied
-                                    ? t("common.copied", "已复制")
-                                    : t("common.copy", "复制")
-                                }
-                                aria-label={
-                                  reauthEmailCopied
-                                    ? t("common.copied", "已复制")
-                                    : t("common.copy", "复制")
-                                }
-                              >
-                                {reauthEmailCopied ? (
-                                  <Check size={16} />
-                                ) : (
-                                  <Copy size={16} />
-                                )}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                        {reauthTargetAccount && (
-                          <div className="codex-reauth-note-summary">
-                            {renderAccountNoteButton(reauthTargetAccount)}
-                          </div>
-                        )}
                         {shouldShowPendingOAuthDraftForm && (
                           <div className="codex-pending-oauth-draft">
                             <div className="oauth-link">
@@ -1298,28 +1303,6 @@ export function CodexAddAccountDialog(props: CodexAccountsViewProps) {
                             )}
                           </>
                         )}
-                        <div className="api-key-add-actions">
-                          <button
-                            className="btn btn-primary"
-                            onClick={() => void handleApiKeyLogin()}
-                            disabled={
-                              importing ||
-                              addStatus === "loading" ||
-                              apiModelCatalogFetching ||
-                              !apiKeyInput.trim()
-                            }
-                          >
-                            {addStatus === "loading" ? (
-                              <RefreshCw
-                                size={16}
-                                className="loading-spinner"
-                              />
-                            ) : (
-                              <KeyRound size={16} />
-                            )}
-                            {t("common.shared.addAccount", "添加账号")}
-                          </button>
-                        </div>
                       </div>
                     )}
                     {addTab === "token" && (
@@ -1529,6 +1512,18 @@ export function CodexAddAccountDialog(props: CodexAccountsViewProps) {
                       </div>
                     )}
                   </div>
+                {addTab === "apikey" && (
+                  <div className="modal-footer api-key-add-actions">
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => void handleApiKeyLogin()}
+                      disabled={importing || addStatus === "loading" || apiModelCatalogFetching || !apiKeyInput.trim()}
+                    >
+                      {addStatus === "loading" ? <RefreshCw size={16} className="loading-spinner" /> : <KeyRound size={16} />}
+                      {t("common.shared.addAccount", "添加账号")}
+                    </button>
+                  </div>
+                )}
                 </div>
               </div>
               {localImportInstances ? (

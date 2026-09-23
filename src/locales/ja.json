@@ -86,6 +86,7 @@
     "viewError": "エラーを見る"
   },
   "common": {
+    "retry": "再試行",
     "quotaRefreshScheduler": {
       "busy": "更新キューが混雑しています。しばらくしてから再試行してください。",
       "timeout": "使用枠の更新がタイムアウトしました。再試行してください。",
@@ -364,7 +365,11 @@
     "deleteTagWarning": "すべてのアカウントからタグを削除してもよろしいですか？",
     "expand": "展開",
     "processing": "処理中...",
-    "selectAll": "すべて選択"
+    "selectAll": "すべて選択",
+    "quota": {
+      "weeklyWindow": "週間"
+    },
+    "optional": "（任意）"
   },
   "nav": {
     "overview": "Antigravity IDE​",
@@ -2192,10 +2197,18 @@
     "refreshAllSuccess": "更新完了、{{count}} アカウント成功",
     "refreshAllPartialFailed": "更新完了、{{success}} / {{total}} アカウント成功、一部失敗",
     "launchPreview": {
+      "configLoading": "インスタンス設定を読み込み中…",
+      "configRefreshing": "インスタンス設定を確認中です。既存の内容は引き続き表示できます。",
+      "configLoadTimeout": "インスタンス設定の読み込みがタイムアウトしました。再試行してください。",
+      "configChanged": "インスタンス設定が別の場所で変更されました。保存または起動する前に再読み込みしてください。",
       "accessModeTitle": "起動方式",
       "prosLabel": "長所：",
       "consLabel": "短所：",
-      "accessModeDescription": "DeepSeek の起動方式を選択します。モデル切り替え、OAuth、画像転送の可否が異なります。",
+      "accessModeDescription": "このプロバイダーの起動方式を選択します。方式によりモデル切り替え、OAuth、画像生成の転送が異なります。",
+      "accessModeApiServiceFixed": "API サービスは常にゲートウェイモードで動作し、変更できません。",
+      "imageGenApiServiceFixed": "API サービスの画像生成転送は「API サービス → 設定」で一括管理します。ここは現在の状態のみを表示します。",
+      "oauthBindingApiServiceHint": "API サービスの OAuth 連携は「API サービス → 設定」で一括管理します。ここは入口の状態のみを表示します。",
+      "oauthBindingApiServiceManaged": "API サービスのアカウントプールで管理",
       "accessModeGatewayPros": "1：Codex 内でモデルを切り替えできます\n2：OAuth アカウントを紐付け、遠端圧縮やブラウザ操作などの OAuth 機能を利用できます\n3：GPT アカウントを設定して画像生成を転送できます",
       "accessModeGatewayCons": "1：インスタンス内蔵ゲートウェイが必要で、直連より少し遅くなります",
       "accessModeDirectPros": "1：ゲートウェイを通らず最速です",
@@ -2627,6 +2640,8 @@
       "requestLogSuccess": "成功",
       "requestLogFailed": "失敗",
       "requestLogTokens": "{{value}} トークン",
+      "imageForwardLabel": "GPT 画像生成を有効化",
+      "imageForwardHint": "有効化して GPT アカウントを選択すると、画像生成と画像編集のリクエストは選択したアカウントで実行され、その枠を消費します。チャットのリクエストは引き続きアカウントプールで処理されます。",
       "imageGenerationMode": {
         "enabled": "有効",
         "imagesOnly": "画像のみ",
@@ -2696,7 +2711,8 @@
           "recover": "復旧",
           "recovering": "復旧中…",
           "recoverAll": "すべて復旧",
-          "resyncPool": "プールを再同期"
+          "resyncPool": "プールを再同期",
+          "reauthorizeHint": "アカウントの認証情報が無効になっています。公式ログインで再認証してください。スケジューラのリセットだけでは復旧しません。"
         }
       },
       "testChatModel": "モデル",
@@ -2790,6 +2806,7 @@
       "resetCreditGrantedAt": "付与",
       "resetCreditExpiresAt": "期限",
       "windowAccountCostHint": "アカウント課金（モデル価格の概算）",
+      "windowEstimatedFullCostHint": "使用済み割合から換算し、このウィンドウを使い切った場合のアカウント課金の目安",
       "windowUserCostHint": "ユーザー課金",
       "windowWeeks": "{{count}}週クォータ",
       "windowDays": "{{count}}日クォータ",
@@ -2884,7 +2901,7 @@
       "heroSubtitle": "OAuth の Codex アカウント向けに時間指定のウェイクアップタスクを作成し、その場でテストを実行し、すべてのトリガーを一か所で確認できます。",
       "runtimeReady": "Codex CLI は利用可能です",
       "runtimeMissing": "Codex CLI が必要です",
-      "runtimeCardTitle": "Codex CLI 環境",
+      "runtimeCardTitle": "実行方法",
       "runtimeUnknownPath": "パスが検出されていません",
       "runtimeUnchecked": "最新状態を取得するには再確認してください",
       "runtimeVersion": "バージョン {{version}}",
@@ -3063,11 +3080,7 @@
       "runtimeConfigCodexCliPlaceholder": "例: /opt/homebrew/bin/codex",
       "runtimeConfigNodeLabel": "node パス",
       "runtimeConfigNodePlaceholder": "例: /opt/homebrew/bin/node",
-      "runtimeConfigApplyHint": "変更後に「CLI を再チェック」をクリックすると保存され、すぐ反映されます。",
-      "officialChatRuntimeTitle": "公式直接接続",
-      "officialChatRuntimePath": "ChatGPT 公式 Codex チャット",
-      "officialChatRuntimeSource": "公式直接接続",
-      "officialChatRuntimeMessage": "OAuth アカウントで直接対話"
+      "runtimeConfigApplyHint": "変更後に「CLI を再チェック」をクリックすると保存され、すぐ反映されます。"
     },
     "sessionManager": {
       "title": "セッション管理",
@@ -3559,6 +3572,13 @@
       }
     },
     "modelProviders": {
+      "keyModels": {
+        "title": "Key のモデル",
+        "override": "個別設定",
+        "help": "オフの場合はプロバイダーのモデル設定を継承します。オンの場合は、この Key のみ独自のカタログと機能を使用します。",
+        "saved": "Key のモデル設定を保存しました。実行中のクライアントを再起動すると反映されます。",
+        "inherit": "プロバイダーを継承"
+      },
       "tab": "モデルプロバイダー",
       "desc": "モデルプロバイダーと複数の API キーをまとめて管理し、Codex の API キーアカウントを追加するときにそのまま再利用できます。",
       "add": "プロバイダーを追加",
@@ -3567,6 +3587,7 @@
       "emptyTitle": "モデルプロバイダーはまだありません",
       "emptyDesc": "右上の「プロバイダーを追加」をクリックして開始します。",
       "baseUrl": "ベース URL",
+      "customEndpointHint": "カスタムエンドポイントを使用中：このアドレスは「{{preset}}」の公式エンドポイントではありません。サードパーティ互換のエンドポイントとして扱うため、プロトコルとモデルカタログは上流に合わせて設定してください。",
       "modelCatalog": "モデル",
       "modelCatalogEmpty": "モデルカタログ未設定",
       "gatewayHint": "サードパーティプロバイダーは、インスタンス分離とプロトコル変換のためローカルゲートウェイ経由で起動します。公式 OpenAI プロバイダーは直接接続のままです。",
@@ -3577,6 +3598,8 @@
       "unnamedKey": "名称未設定のキー",
       "createTitle": "モデルプロバイダーを追加",
       "editTitle": "モデルプロバイダーを編集",
+      "copySuffix": "コピー",
+      "duplicate": "プロバイダーを複製（キーなしの新規コピー）",
       "existingApiKeys": "既存の API キー",
       "fields": {
         "name": "プロバイダー名",
@@ -3625,7 +3648,8 @@
         "responses": "Responses ネイティブ",
         "chatCompletions": "Chat Completions プロトコル",
         "deepseekResponsesHint": "DeepSeek を起動してゲートウェイまたは公式ダイレクト接続を選択し、Flash か Pro を選びます。ゲートウェイは Codex 内にモデルを表示します。ダイレクト接続はゲートウェイを経由しません。",
-        "deepseekChatHint": "DeepSeek Chat Completions はレガシーパスでローカルゲートウェイブリッジを使用します。公式の Codex ツール動作が必要な場合は Responses を選択してください。"
+        "deepseekChatHint": "DeepSeek Chat Completions はレガシーパスでローカルゲートウェイブリッジを使用します。公式の Codex ツール動作が必要な場合は Responses を選択してください。",
+        "deepseekThirdPartyHint": "このアドレスは DeepSeek 公式のエンドポイントではないため、サードパーティ互換として扱います。モデルカタログには上流の実際のモデル ID を入力し、公式モデル名は使わないでください。"
       },
       "selectSavedProvider": "保存済みプロバイダー",
       "selectSavedApiKey": "保存済み API キー",
@@ -3847,7 +3871,17 @@
       "renameApiKeyPrompt": "API キー名を変更",
       "renameApiKeySuccess": "API キーを変更しました",
       "renameApiKeyFailed": "API キー名の変更に失敗：{{error}}",
-      "existingApiKeysSearch": "既存 API Key を検索…"
+      "existingApiKeysSearch": "既存 API Key を検索…",
+      "copyConfig": "設定をコピー（キーなし）",
+      "copyConfigSuccess": "API キーを除いた設定をコピーしました。プロバイダー追加時に貼り付けてください。",
+      "copyConfigFailed": "設定のコピーに失敗しました：{{error}}",
+      "importConfig": "クリップボードから設定を読み込む",
+      "importConfigSuccess": "クリップボードから設定を読み込みました。API キーを入力して保存してください。",
+      "importConfigInvalid": "クリップボードに設定がありません（カードの「設定をコピー」を使用）。",
+      "importConfigFailed": "クリップボードからの読み込みに失敗しました：{{error}}",
+      "importConfigPlaceholder": "カードの「設定をコピー」を使い、内容をここに貼り付けます",
+      "importConfigAction": "設定を読み込む",
+      "importConfigFromClipboard": "クリップボードを読み取る"
     },
     "quickSwitch": {
       "action": "プロバイダーをクイック切り替え",
@@ -4028,8 +4062,6 @@
       "standardDesc": "既定の速度、通常の使用量",
       "fast": "高速",
       "fastDesc": "1.5倍速、使用量が増加",
-      "ultrafast": "超高速",
-      "ultrafastDesc": "最速の応答、使用量が最大",
       "saveSuccess": "速度を更新しました",
       "saveFailed": "速度の保存に失敗しました: {{error}}"
     },
@@ -4209,7 +4241,8 @@
         "reasoningEffort": "思考強度",
         "reasoningEffortValue": "思考 {{effort}}",
         "serviceTier": "サービス階層",
-        "serviceTierValue": "階層 {{tier}}"
+        "serviceTierValue": "階層 {{tier}}",
+        "upstreamModel": "実際のモデル"
       },
       "timeouts": {
         "entryLabel": "詳細",
@@ -5451,12 +5484,6 @@
     },
     "quota": {
       "usedOfTotal": "{{used}} / {{total}}​"
-    },
-    "sessions": {
-      "title": "ローカルセッション",
-      "desc": "ローカルセッション — ローカルデータからスキャンして場所を開きます。",
-      "empty": "セッションファイルが見つかりません",
-      "open": "場所を開く"
     }
   },
   "qoder": {
@@ -6048,7 +6075,7 @@
   "apiKeyFun": {
     "eyebrow": "中継サービス",
     "title": "APIKEY.FUN リレー",
-    "description": "Cockpit 公式パートナーの中継サービスで、安定したオープンで高コストパフォーマンスな大規模モデル API 接続を提供します。Claude、OpenAI、Gemini などの主要モデルに対応し、Codex、Gemini CLI、Claude Code などの開発ツールで統一して設定できます。Cockpit 専用リンクから登録すると、チャージが永久に最大 5% 割引になります。",
+    "description": "Cockpit 公式パートナーの中継サービスで、安定したオープンで高コストパフォーマンスな大規模モデル API 接続を提供します。Claude、ChatGPT、Grok、Gemini、Zhipu GLM、Kimi、DeepSeek などの主要モデルに対応し、Codex、Gemini CLI、Claude Code などの開発ツールで統一して設定できます。Cockpit 専用リンクから登録すると、チャージが永久に最大 5% 割引になります。",
     "register": "専用登録リンク",
     "docs": "公式ドキュメント",
     "viewNow": "今すぐ見る",
@@ -6160,13 +6187,34 @@
       "addToClaudeDesktop": "Claude に追加",
       "addToClaudeCli": "Claude CLI に追加",
       "codexShort": "Codex",
-      "claudeShort": "Claude CLI"
+      "claudeShort": "Claude CLI",
+      "deployToCodex": "Codex へクイック展開",
+      "deploying": "モデルを取得中…",
+      "deploySuccess": "Codex に展開しました：モデル {{count}} 件",
+      "deployFailed": "展開に失敗しました：{{error}}",
+      "useKey": "キーを使用"
     },
     "prefill": {
       "claudeDesktopReady": "APIKEY.FUN の設定を入力しました。Claude への追加を確認してください。"
     },
     "copyKey": "Copy Key​",
-    "clearKey": "Clear input​"
+    "clearKey": "Clear input​",
+    "table": {
+      "name": "名前",
+      "usage": "使用量",
+      "status": "状態",
+      "createdAt": "追加日時",
+      "actions": "操作",
+      "statusOk": "利用可能",
+      "statusBad": "異常",
+      "statusUnknown": "未確認"
+    },
+    "config": {
+      "title": "API キーを使用",
+      "family": "グループ",
+      "platform": "現在のシステム",
+      "unsupportedGroup": "このグループにはワンクリック書き込みできるクライアントがまだありません。"
+    }
   },
   "grok": {
     "search": "Grok CLI アカウントを検索...",

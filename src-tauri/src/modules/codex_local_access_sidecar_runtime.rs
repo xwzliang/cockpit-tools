@@ -718,6 +718,8 @@ pub async fn recover_local_access_accounts(
         return Err("没有找到可恢复的账号".to_string());
     }
 
+    refresh_managed_accounts_before_recovery(&selected).await;
+
     let reset_account_ids = request_sidecar_reset_scheduler(&collection, port, &selected).await?;
     let reset_account_id_set = reset_account_ids.iter().collect::<HashSet<_>>();
     let recovered_entire_collection = selected.len() == collection.account_ids.len()
@@ -734,6 +736,122 @@ pub async fn recover_local_access_accounts(
     );
     mark_quota_cooldowns_recovered(&mut runtime, &reset_account_ids, now);
     Ok(build_fresh_state_snapshot(&mut runtime))
+}
+
+/// 账号凭据更新（重新授权 / 本机导入）后立即让本地网关生效。
+///
+/// 重新授权只把新 Token 写进账号库；运行中的 sidecar 仍持有旧 Token，会继续 401，
+/// 界面也继续显示上一次的失败原因。这里立刻写穿 auth 文件，并在后台重置该账号在
+/// sidecar 调度器里的失败状态、清掉宿主缓存的错误信息。
+pub fn notify_account_credentials_updated(account: &CodexAccount) {
+    if account.is_api_key_auth() {
+        return;
+    }
+    if let Err(error) = sync_sidecar_auth_file_for_account(account) {
+        logger::log_codex_api_warn(&format!(
+            "[CodexLocalAccess] 账号凭据更新后同步 sidecar 认证失败: account_id={}, error={}",
+            account.id, error
+        ));
+        return;
+    }
+    emit_local_access_state_updated();
+    let account_id = account.id.clone();
+    tauri::async_runtime::spawn(async move {
+        reset_scheduler_state_after_credentials_update(account_id).await;
+    });
+}
+
+async fn reset_scheduler_state_after_credentials_update(account_id: String) {
+    if let Err(error) = ensure_runtime_loaded_without_start().await {
+        logger::log_codex_api_info(&format!(
+            "[CodexLocalAccess] 账号凭据更新后加载运行态失败（跳过调度状态重置）: account_id={}, error={}",
+            account_id, error
+        ));
+        return;
+    }
+    let (collection, port, running) = {
+        let runtime = gateway_runtime().lock().await;
+        let Some(collection) = runtime.collection.clone() else {
+            return;
+        };
+        (
+            collection.clone(),
+            runtime.actual_port.unwrap_or(collection.port),
+            runtime.running,
+        )
+    };
+    if !collection
+        .account_ids
+        .iter()
+        .any(|item| item == &account_id)
+    {
+        return;
+    }
+    if running {
+        match request_sidecar_reset_scheduler(&collection, port, std::slice::from_ref(&account_id))
+            .await
+        {
+            Ok(reset_account_ids) => {
+                let mut runtime = gateway_runtime().lock().await;
+                clear_runtime_account_health(&mut runtime, &reset_account_ids, false);
+                mark_quota_cooldowns_recovered(&mut runtime, &reset_account_ids, now_ms());
+                drop(runtime);
+                emit_local_access_state_updated();
+                return;
+            }
+            Err(error) => logger::log_codex_api_warn(&format!(
+                "[CodexLocalAccess] 账号凭据更新后重置 sidecar 调度状态失败: account_id={}, error={}",
+                account_id, error
+            )),
+        }
+    }
+    // 网关未运行或重置失败时，至少清掉宿主侧缓存的失败信息。
+    let mut runtime = gateway_runtime().lock().await;
+    clear_runtime_account_health(&mut runtime, std::slice::from_ref(&account_id), false);
+    drop(runtime);
+    emit_local_access_state_updated();
+}
+
+/// 上游 401（invalidated oauth token / auth_unavailable）时 access_token 往往还没过期，
+/// 仅重置调度状态后下一次请求仍会立刻 401，表现为「点了恢复没反应」。这里复用后台
+/// 刷新链路做一次强制刷新并同步 sidecar auth 文件；刷新失败时保持原状，由界面引导
+/// 用户重新授权。
+async fn refresh_managed_accounts_before_recovery(account_ids: &[String]) {
+    const RECOVERY_REFRESH_TIMEOUT: Duration = Duration::from_secs(15);
+    stream::iter(account_ids.iter().cloned())
+        .for_each_concurrent(GATEWAY_ACCOUNT_REFRESH_CONCURRENCY, |account_id| async move {
+            let Some(account) = codex_account::load_account(&account_id) else {
+                return;
+            };
+            if account.is_api_key_auth() || !codex_account::account_has_refresh_token(&account) {
+                return;
+            }
+            match timeout(
+                RECOVERY_REFRESH_TIMEOUT,
+                codex_account::force_refresh_managed_account(&account_id, "recover"),
+            )
+            .await
+            {
+                Ok(Ok(account)) => {
+                    if let Err(error) = sync_sidecar_auth_file_for_account(&account) {
+                        logger::log_codex_api_warn(&format!(
+                            "[CodexLocalAccess] 恢复账号后同步 sidecar 认证失败: account_id={}, error={}",
+                            account_id, error
+                        ));
+                    }
+                }
+                Ok(Err(error)) => logger::log_codex_api_warn(&format!(
+                    "[CodexLocalAccess] 恢复账号时刷新凭据失败（需要重新授权）: account_id={}, error={}",
+                    account_id, error
+                )),
+                Err(_) => logger::log_codex_api_warn(&format!(
+                    "[CodexLocalAccess] 恢复账号时刷新凭据超时: account_id={}, timeout_secs={}",
+                    account_id,
+                    RECOVERY_REFRESH_TIMEOUT.as_secs()
+                )),
+            }
+        })
+        .await;
 }
 
 async fn update_sidecar_account_health_from_values(
@@ -828,10 +946,16 @@ async fn record_sidecar_usage_event(event: SidecarUsageEvent) {
     let api_key_id = non_empty_sidecar_string(&event.api_key_id);
     let api_key_label = non_empty_sidecar_string(&event.api_key_label);
     let client_instance_id = non_empty_sidecar_string(&event.client_instance_id);
-    let reported_model = non_empty_sidecar_string(&event.model)
+    let reported_model = non_empty_sidecar_string(&event.upstream_model)
+        .or_else(|| non_empty_sidecar_string(&event.model))
         .or_else(|| non_empty_sidecar_string(&event.alias))
         .unwrap_or_default();
-    let model = resolve_recorded_usage_model_id(account_id.as_deref(), &reported_model);
+    let upstream_model = resolve_recorded_usage_model_id(account_id.as_deref(), &reported_model);
+    // 客户端请求模型优先用 sidecar 新字段，旧事件回退到 alias/上游模型，
+    // 保证历史数据与不支持该字段的 sidecar 版本仍能正常入库。
+    let requested_model = non_empty_sidecar_string(&event.requested_model)
+        .or_else(|| non_empty_sidecar_string(&event.alias))
+        .or_else(|| upstream_model.clone());
     let request_id = non_empty_sidecar_string(&event.request_id);
     let error_category = normalized_sidecar_error_category(&event);
     if let Err(error) = record_request_stats_with_meta(
@@ -839,7 +963,7 @@ async fn record_sidecar_usage_event(event: SidecarUsageEvent) {
         account_email.as_deref(),
         api_key_id.as_deref(),
         api_key_label.as_deref(),
-        model.as_deref(),
+        upstream_model.as_deref(),
         parse_sidecar_request_kind(&event.request_kind),
         event.success,
         error_category.as_deref(),
@@ -852,6 +976,8 @@ async fn record_sidecar_usage_event(event: SidecarUsageEvent) {
             error_message: event.error_message.as_deref(),
             service_tier: event.service_tier.as_deref(),
             reasoning_effort: event.reasoning_effort.as_deref(),
+            requested_model: requested_model.as_deref(),
+            upstream_model: upstream_model.as_deref(),
         },
     )
     .await
@@ -1504,16 +1630,19 @@ fn apply_profile_model_definition_overrides(
             (definition.template.as_ref().and_then(Value::as_object), model.as_object_mut())
         {
             for (key, value) in template {
-                // slug / 展示字段由我们自己的定义决定，其余按官方模板补齐。
+                // slug / 展示字段由我们自己的定义决定，comp_hash 统一由目录生成器决定，
+                // 其余按官方模板补齐。
                 if matches!(
                     key.as_str(),
-                    "slug" | "display_name" | "description" | "visibility"
+                    "slug" | "display_name" | "description" | "visibility" | "comp_hash"
                 ) {
                     continue;
                 }
                 object.insert(key.clone(), value.clone());
             }
         }
+        // DeepSeek 官方模板可能含 null，不能覆盖最终的协作声明。
+        codex_protocol::apply_deepseek_multi_agent_capability(model);
         if definition.image_capable {
             if let Some(object) = model.as_object_mut() {
                 // 与 DeepSeek 网关模式一致：请求里的图片会由网关自动转到识图模型，
@@ -1560,6 +1689,34 @@ fn local_access_profile_hidden_model_definitions() -> Vec<(String, String)> {
         .collect()
 }
 
+/// API 服务启动预览：即使实例 profile 还没被接管，也按账号池算出本次会渲染的模型清单。
+pub(crate) fn api_service_preview_model_definitions(
+    profile_dir: &Path,
+) -> Option<Vec<crate::models::codex::CodexExperimentalModelDefinition>> {
+    let collection = load_collection_from_disk().ok().flatten()?;
+    let definitions =
+        local_access_profile_model_definitions(profile_dir, &collection, &collection.api_key, true)
+            .ok()?;
+    // 客户端内部隐藏条目（生图、自动审查等）只服务于请求链路，不进入启动预览列表。
+    let hidden: HashSet<String> = local_access_profile_hidden_model_definitions()
+        .into_iter()
+        .map(|(model_id, _)| model_id.to_ascii_lowercase())
+        .collect();
+    Some(
+        definitions
+            .into_iter()
+            .filter(|definition| !hidden.contains(&definition.model_id.to_ascii_lowercase()))
+            .map(|definition| crate::models::codex::CodexExperimentalModelDefinition {
+                model_id: definition.model_id,
+                display_name: definition.display_name,
+                reasoning_efforts: None,
+                context_window: None,
+                auto_compact_token_limit: None,
+            })
+            .collect(),
+    )
+}
+
 fn local_access_profile_model_definitions(
     profile_dir: &Path,
     collection: &CodexLocalAccessCollection,
@@ -1571,7 +1728,9 @@ fn local_access_profile_model_definitions(
             .experimental_model_catalog_enabled;
     // 该 profile 能承接的账号池里没有 GPT / Codex 能力时，客户端选择器只展示账号池自己的模型
     // （例如只加了 Grok 账号就只显示 Grok 模型），不再无条件塞入官方推荐 GPT 集。
-    let pool_accounts: Vec<CodexAccount> = effective_sidecar_account_ids(collection)
+    // 这里必须只看对话账号：仅用于生图转发的 OAuth 账号不承接对话模型，否则「绑定 OAuth
+    // 生图账号」会让只加了 DeepSeek / Grok 的池也展示整套官方 GPT 模型。
+    let pool_accounts: Vec<CodexAccount> = conversation_sidecar_account_ids(collection)
         .into_iter()
         .filter_map(|account_id| codex_account::load_account(&account_id))
         .filter(|account| {
@@ -1579,9 +1738,24 @@ fn local_access_profile_model_definitions(
         })
         .collect();
     let include_official_gpt_models = pool_provides_gpt_models(&pool_accounts);
+    let user_took_over_catalog =
+        codex_account::has_saved_experimental_model_definitions(profile_dir);
     let mut definitions: Vec<ProfileModelDefinition> = if experimental_model_catalog_enabled {
-        codex_account::read_experimental_model_definitions(profile_dir)
-            .iter()
+        let saved_definitions = codex_account::read_experimental_model_definitions(profile_dir);
+        let models = if user_took_over_catalog {
+            // 用户已接管模型清单：完全以用户定义为准，不再叠加账号池模型或按池过滤。
+            saved_definitions
+        } else {
+            overlay_rendered_pool_models_on_experimental_catalog(profile_dir, saved_definitions)
+                .into_iter()
+                .filter(|model| {
+                    include_official_gpt_models
+                        || !is_official_gpt_or_reserve_catalog_model(&model.model_id)
+                })
+                .collect()
+        };
+        models
+            .into_iter()
             .map(|model| ProfileModelDefinition::plain(&model.model_id, &model.display_name))
             .collect()
     } else {
@@ -1696,14 +1870,31 @@ fn write_local_access_profile_client_models(
     });
     let content = serde_json::to_string_pretty(&catalog)
         .map_err(|e| format!("生成 Codex API 服务模型目录失败: {}", e))?;
+    // Apply profile overrides after templates and pool models have been merged;
+    // startup and passive reconciliation must use the same final values.
+    let content = codex_account::decorate_managed_model_catalog_for_profile(profile_dir, &content)?;
     let catalog_file = CODEX_MANAGED_MODEL_CATALOG_FILE;
-    write_string_atomic(&profile_dir.join(catalog_file), &content)
+    let catalog_changed = write_string_atomic_if_changed(&profile_dir.join(catalog_file), &content)
         .map_err(|e| format!("写入 Codex API 服务模型目录失败: {}", e))?;
+    if let Err(err) = crate::modules::codex_managed_model_catalog_version::write_managed_catalog_meta(
+        &profile_dir.join(catalog_file),
+    ) {
+        logger::log_codex_api_warn(&format!(
+            "[Codex模型目录] 写入 API 服务模型目录版本戳失败: path={}, error={}",
+            profile_dir.join(catalog_file).display(),
+            err
+        ));
+    }
     codex_account::cleanup_legacy_managed_model_catalogs(profile_dir);
-    invalidate_codex_model_cache(profile_dir)?;
+    if catalog_changed {
+        invalidate_codex_model_cache(profile_dir)?;
+    }
 
     let config_path = profile_config_path(profile_dir);
     let mut doc = crate::modules::codex_config_format::load_codex_config_doc(&config_path)?;
+    if doc.get("model_catalog_json").and_then(|item| item.as_str()) == Some(catalog_file) {
+        return Ok(());
+    }
     doc["model_catalog_json"] = value(catalog_file);
     let content = crate::modules::codex_config_format::codex_config_doc_to_string(&mut doc);
     crate::modules::codex_config_format::write_codex_config_toml_atomic(&config_path, &content)
@@ -1817,6 +2008,7 @@ async fn write_local_access_profile_takeover(
         // 账号池里含 DeepSeek 时压缩不能走远程：DeepSeek 没有服务端压缩，请求一旦被路由过去
         // 必然失败（详见 ensure_local_compaction_for_account_pool 的说明）。
         ensure_local_compaction_for_account_pool(profile_dir, collection)?;
+        remember_takeover_ownership(profile_dir)?;
     }
     Ok(())
 }
@@ -1982,42 +2174,11 @@ async fn ensure_profile_takeover(
     if !collection.enabled {
         return Ok(());
     }
-    if codex_account::profile_mutation_lease_held_by_other_process(profile_dir) {
-        logger::log_codex_api_warn(&format!(
-            "跳过 API Service profile 自动接管：目标目录正由另一个 Cockpit 进程执行凭据事务: profile_dir={}",
-            profile_dir.display()
-        ));
-        return Ok(());
-    }
-
-    let current = inspect_local_access_profile_attachment(profile_dir, Some(collection));
-    if current.attached && current.error.is_none() {
-        write_local_access_profile_takeover(profile_dir, collection, None, true).await?;
-        return Ok(());
-    }
-
-    save_profile_takeover_backup(profile_dir, &collection.api_key)?;
-    write_local_access_profile_takeover(profile_dir, collection, None, true).await?;
-
-    let next = inspect_local_access_profile_attachment(profile_dir, Some(collection));
-    if !next.attached {
-        return Err(format!(
-            "Codex API 服务已启动，但 Codex 配置未接管本地 API: profile_dir={}, expected_base_url={}",
-            next.profile_dir,
-            next.expected_base_url.unwrap_or_else(|| build_collection_base_url(collection))
-        ));
-    }
-
-    let attached_base_url = next
-        .base_url
-        .clone()
-        .or(next.expected_base_url.clone())
-        .unwrap_or_default();
-    logger::log_codex_api_info(&format!(
-        "Codex API 服务已接管 Codex 配置: profile_dir={} base={}",
-        next.profile_dir, attached_base_url
-    ));
-    Ok(())
+    let profile_dir = profile_dir.to_path_buf();
+    let collection = collection.clone();
+    tokio::task::spawn_blocking(move || maintain_local_access_profile(&profile_dir, &collection))
+        .await
+        .map_err(|error| format!("API profile maintenance task failed: {error}"))?
 }
 
 async fn ensure_local_access_profile_takeovers(

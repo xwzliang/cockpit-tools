@@ -86,6 +86,7 @@
     "viewError": "Ver erro"
   },
   "common": {
+    "retry": "Tentar novamente",
     "quotaRefreshScheduler": {
       "busy": "A fila de atualização está cheia. Tente novamente em instantes.",
       "timeout": "A atualização da cota excedeu o tempo limite. Tente novamente.",
@@ -364,7 +365,11 @@
     "deleteTagWarning": "Tem certeza de que deseja excluir esta tag de todas as contas?",
     "expand": "Expandir",
     "processing": "Processando...",
-    "selectAll": "Selecionar tudo"
+    "selectAll": "Selecionar tudo",
+    "quota": {
+      "weeklyWindow": "Semana"
+    },
+    "optional": " (opcional)"
   },
   "nav": {
     "overview": "Antigravity IDE​",
@@ -2192,10 +2197,18 @@
     "refreshAllSuccess": "Atualização concluída, {{count}} conta(s) com sucesso",
     "refreshAllPartialFailed": "Atualização concluída, {{success}} / {{total}} conta(s) com sucesso e algumas falharam",
     "launchPreview": {
+      "configLoading": "Carregando a configuração da instância…",
+      "configRefreshing": "Verificando a configuração da instância. Os dados atuais continuam disponíveis.",
+      "configLoadTimeout": "O carregamento da configuração da instância excedeu o tempo limite. Tente novamente.",
+      "configChanged": "A configuração da instância foi alterada em outro lugar. Recarregue antes de salvar ou iniciar.",
       "accessModeTitle": "Modo de inicialização",
       "prosLabel": "Vantagens:",
       "consLabel": "Desvantagens:",
-      "accessModeDescription": "Escolha como o DeepSeek inicia; os modos diferem em troca de modelo, OAuth e encaminhamento de imagens.",
+      "accessModeDescription": "Escolha como este provedor inicia; os modos diferem na troca de modelo, OAuth e encaminhamento de geração de imagens.",
+      "accessModeApiServiceFixed": "O serviço de API sempre usa o modo gateway; não pode ser alterado.",
+      "imageGenApiServiceFixed": "O encaminhamento de geração de imagens do serviço de API é gerenciado em “Serviço de API → Configurações”; aqui só é mostrado o estado atual.",
+      "oauthBindingApiServiceHint": "A vinculação OAuth do serviço de API é gerenciada em “Serviço de API → Configurações”; aqui só é mostrado o estado da entrada.",
+      "oauthBindingApiServiceManaged": "Gerenciado pelo pool de contas do serviço de API",
       "accessModeGatewayPros": "1: Trocar de modelo dentro do Codex\n2: Vincular contas OAuth e usar funções OAuth como compactação remota e controle do navegador\n3: Configurar contas GPT para encaminhar a geração de imagens",
       "accessModeGatewayCons": "1: Exige o gateway local da instância e é um pouco mais lento que o direto",
       "accessModeDirectPros": "1: Sem gateway, a opção mais rápida",
@@ -2627,6 +2640,8 @@
       "requestLogSuccess": "Sucesso",
       "requestLogFailed": "Falhou",
       "requestLogTokens": "{{value}} tokens",
+      "imageForwardLabel": "Ativar a geração de imagens GPT",
+      "imageForwardHint": "Após ativar, escolha contas GPT: as solicitações de geração e edição de imagens passam pelas contas selecionadas e consomem a cota delas, enquanto o chat continua usando o pool de contas.",
       "imageGenerationMode": {
         "enabled": "Ativado",
         "imagesOnly": "Só imagens",
@@ -2696,7 +2711,8 @@
           "recover": "Recuperar",
           "recovering": "Recuperando…",
           "recoverAll": "Recuperar tudo",
-          "resyncPool": "Ressincronizar o pool"
+          "resyncPool": "Ressincronizar o pool",
+          "reauthorizeHint": "As credenciais da conta não são mais válidas; faça login oficial novamente. Apenas redefinir o agendador não resolve."
         }
       },
       "testChatModel": "Modelo",
@@ -2790,6 +2806,7 @@
       "resetCreditGrantedAt": "Concedida",
       "resetCreditExpiresAt": "Expira",
       "windowAccountCostHint": "Cobrança da conta (estimada pelos preços do modelo)",
+      "windowEstimatedFullCostHint": "Estimado pelo uso atual: custo cobrado da conta se esta janela fosse esgotada",
       "windowUserCostHint": "Cobrança do usuário",
       "windowWeeks": "Cota {{count}} sem.",
       "windowDays": "Cota {{count}} d",
@@ -2884,7 +2901,7 @@
       "heroSubtitle": "Crie tarefas de ativação por horário para contas OAuth do Codex, execute testes rápidos e acompanhe cada acionamento em um só lugar.",
       "runtimeReady": "Codex CLI pronto",
       "runtimeMissing": "Codex CLI necessário",
-      "runtimeCardTitle": "CLI do Codex",
+      "runtimeCardTitle": "Modo de execução",
       "runtimeUnknownPath": "Caminho não detectado",
       "runtimeUnchecked": "Verifique novamente para buscar o status mais recente",
       "runtimeVersion": "Versão {{version}}",
@@ -3063,11 +3080,7 @@
       "runtimeConfigCodexCliPlaceholder": "ex.: /opt/homebrew/bin/codex",
       "runtimeConfigNodeLabel": "Caminho do node",
       "runtimeConfigNodePlaceholder": "ex.: /opt/homebrew/bin/node",
-      "runtimeConfigApplyHint": "Após alterar, clique em \"Verificar CLI novamente\" para salvar e aplicar na hora.",
-      "officialChatRuntimeTitle": "Direto oficial",
-      "officialChatRuntimePath": "Chat Codex oficial do ChatGPT",
-      "officialChatRuntimeSource": "Direto oficial",
-      "officialChatRuntimeMessage": "Chat direto com conta OAuth"
+      "runtimeConfigApplyHint": "Após alterar, clique em \"Verificar CLI novamente\" para salvar e aplicar na hora."
     },
     "sessionManager": {
       "title": "Gerenciador de sessões",
@@ -3559,6 +3572,13 @@
       }
     },
     "modelProviders": {
+      "keyModels": {
+        "title": "Modelos da chave",
+        "override": "Personalizar",
+        "help": "Quando desativado, herda as configurações de modelos do provedor. Quando ativado, apenas esta chave usa catálogo e recursos próprios.",
+        "saved": "Configurações de modelos da chave salvas. Reinicie os clientes em execução para aplicá-las.",
+        "inherit": "Herdar do provedor"
+      },
       "tab": "Provedores de modelo",
       "desc": "Gerencie provedores de modelo e várias chaves API em um só lugar e reutilize-os diretamente ao adicionar contas Codex com chave API.",
       "add": "Adicionar provedor",
@@ -3567,6 +3587,7 @@
       "emptyTitle": "Ainda não há provedores de modelo",
       "emptyDesc": "Clique em “Adicionar provedor” no canto superior direito para começar.",
       "baseUrl": "URL base",
+      "customEndpointHint": "Endpoint personalizado em uso: este endereço não é o endpoint oficial de “{{preset}}”. Será tratado como endpoint compatível de terceiros; ajuste o protocolo e o catálogo de modelos conforme o upstream.",
       "modelCatalog": "Modelos",
       "modelCatalogEmpty": "Sem catálogo de modelos",
       "gatewayHint": "Provedores de terceiros iniciam pelo gateway local para isolar a instância e converter o protocolo. Provedores oficiais da OpenAI continuam diretos.",
@@ -3577,6 +3598,8 @@
       "unnamedKey": "Chave sem nome",
       "createTitle": "Adicionar provedor de modelo",
       "editTitle": "Editar provedor de modelo",
+      "copySuffix": "Cópia",
+      "duplicate": "Duplicar provedor (nova cópia sem chave)",
       "existingApiKeys": "Chaves API existentes",
       "fields": {
         "name": "Nome do provedor",
@@ -3625,7 +3648,8 @@
         "responses": "Responses nativo",
         "chatCompletions": "Protocolo Chat Completions",
         "deepseekResponsesHint": "Inicie o DeepSeek para escolher gateway ou conexão direta oficial e selecione Flash ou Pro. O gateway lista modelos no Codex; a conexão direta ignora o gateway.",
-        "deepseekChatHint": "O DeepSeek Chat Completions usa a ponte do gateway local para caminhos legados. Escolha Responses quando precisar do comportamento oficial das ferramentas do Codex."
+        "deepseekChatHint": "O DeepSeek Chat Completions usa a ponte do gateway local para caminhos legados. Escolha Responses quando precisar do comportamento oficial das ferramentas do Codex.",
+        "deepseekThirdPartyHint": "Este endereço não é um endpoint oficial da DeepSeek: será tratado como endpoint compatível de terceiros; no catálogo de modelos use os IDs reais do upstream, não os nomes oficiais."
       },
       "selectSavedProvider": "Provedores salvos",
       "selectSavedApiKey": "Chaves API salvas",
@@ -3847,7 +3871,17 @@
       "renameApiKeyPrompt": "Renomear API key",
       "renameApiKeySuccess": "API key renomeada",
       "renameApiKeyFailed": "Falha ao renomear API key: {{error}}",
-      "existingApiKeysSearch": "Buscar API keys…"
+      "existingApiKeysSearch": "Buscar API keys…",
+      "copyConfig": "Copiar configuração (sem chave)",
+      "copyConfigSuccess": "Configuração do provedor copiada sem a chave de API; cole ao adicionar um provedor.",
+      "copyConfigFailed": "Falha ao copiar a configuração: {{error}}",
+      "importConfig": "Importar configuração da área de transferência",
+      "importConfigSuccess": "Configuração importada da área de transferência; informe a chave de API e salve.",
+      "importConfigInvalid": "Nenhuma configuração encontrada na área de transferência (use Copiar configuração no cartão).",
+      "importConfigFailed": "Falha ao importar da área de transferência: {{error}}",
+      "importConfigPlaceholder": "Use Copiar configuração no cartão do provedor e cole o conteúdo aqui",
+      "importConfigAction": "Importar configuração",
+      "importConfigFromClipboard": "Ler área de transferência"
     },
     "quickSwitch": {
       "action": "Troca rápida de provedor",
@@ -4028,8 +4062,6 @@
       "standardDesc": "Velocidade padrão, uso normal",
       "fast": "Rápida",
       "fastDesc": "Velocidade 1,5x, uso maior",
-      "ultrafast": "Ultrarrápida",
-      "ultrafastDesc": "Respostas mais rápidas, uso maior",
       "saveSuccess": "Velocidade atualizada",
       "saveFailed": "Falha ao salvar a velocidade: {{error}}"
     },
@@ -4209,7 +4241,8 @@
         "reasoningEffort": "Raciocínio",
         "reasoningEffortValue": "Raz. {{effort}}",
         "serviceTier": "Nível de serviço",
-        "serviceTierValue": "Nível {{tier}}"
+        "serviceTierValue": "Nível {{tier}}",
+        "upstreamModel": "Modelo real"
       },
       "timeouts": {
         "entryLabel": "Avançado",
@@ -5451,12 +5484,6 @@
     },
     "quota": {
       "usedOfTotal": "{{used}} / {{total}}​"
-    },
-    "sessions": {
-      "title": "Arquivos de sessão locais",
-      "desc": "Arquivos de sessão locais — Varredura local e abertura do local.",
-      "empty": "Nenhum arquivo de sessão",
-      "open": "Abrir local"
     }
   },
   "qoder": {
@@ -6048,7 +6075,7 @@
   "apiKeyFun": {
     "eyebrow": "Intermediador",
     "title": "Relay APIKEY.FUN",
-    "description": "O relay parceiro oficial do Cockpit oferece acesso API estável, aberto e com ótimo custo-benefício a grandes modelos. Ele oferece suporte a modelos principais como Claude, OpenAI e Gemini, e é adequado para configuração unificada no Codex, Gemini CLI, Claude Code e outras ferramentas de desenvolvimento. Ao se cadastrar pelo link exclusivo do Cockpit, você pode obter desconto permanente de até 5% nas recargas.",
+    "description": "O relay parceiro oficial do Cockpit oferece acesso API estável, aberto e com ótimo custo-benefício a grandes modelos. Ele oferece suporte a modelos principais como Claude, ChatGPT, Grok, Gemini, Zhipu GLM, Kimi e DeepSeek, e é adequado para configuração unificada no Codex, Gemini CLI, Claude Code e outras ferramentas de desenvolvimento. Ao se cadastrar pelo link exclusivo do Cockpit, você pode obter desconto permanente de até 5% nas recargas.",
     "register": "Link exclusivo",
     "docs": "Docs oficiais",
     "viewNow": "Ver agora",
@@ -6160,13 +6187,34 @@
       "addToClaudeDesktop": "Adicionar ao Claude",
       "addToClaudeCli": "Adicionar ao Claude CLI",
       "codexShort": "Codex",
-      "claudeShort": "Claude CLI"
+      "claudeShort": "Claude CLI",
+      "deployToCodex": "Implantação rápida no Codex",
+      "deploying": "Buscando modelos…",
+      "deploySuccess": "Implantado no Codex: {{count}} modelos",
+      "deployFailed": "Falha na implantação: {{error}}",
+      "useKey": "Usar chave"
     },
     "prefill": {
       "claudeDesktopReady": "A configuração da APIKEY.FUN foi preenchida. Confirme para adicionar ao Claude."
     },
     "copyKey": "Copy Key​",
-    "clearKey": "Clear input​"
+    "clearKey": "Clear input​",
+    "table": {
+      "name": "Nome",
+      "usage": "Uso",
+      "status": "Situação",
+      "createdAt": "Adicionado",
+      "actions": "Ações",
+      "statusOk": "Disponível",
+      "statusBad": "Erro",
+      "statusUnknown": "Não verificado"
+    },
+    "config": {
+      "title": "Usar chave de API",
+      "family": "Grupo",
+      "platform": "Sistema atual",
+      "unsupportedGroup": "Ainda não há clientes de um clique para este grupo."
+    }
   },
   "grok": {
     "search": "Buscar contas do Grok CLI...",
