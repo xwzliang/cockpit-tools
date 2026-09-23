@@ -9,6 +9,33 @@ fn link_macos_swift_runtime_rpaths() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
 }
 
+#[cfg(target_os = "macos")]
+fn add_swift_lib_search_paths() {
+    if let Ok(out_dir) = std::env::var("OUT_DIR") {
+        let swift_out = Path::new(&out_dir).join("swift-rs");
+        if swift_out.is_dir() {
+            let mut emitted = std::collections::HashSet::new();
+            fn scan_dir(dir: &Path, emitted: &mut std::collections::HashSet<PathBuf>) {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            scan_dir(&path, emitted);
+                        } else if path.file_name().and_then(|n| n.to_str()) == Some("libMacosNativeMenuSwift.a") {
+                            if let Some(parent) = path.parent() {
+                                if emitted.insert(parent.to_path_buf()) {
+                                    println!("cargo:rustc-link-search=native={}", parent.display());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            scan_dir(&swift_out, &mut emitted);
+        }
+    }
+}
+
 fn go_target_from_rust_target(target: &str) -> Option<(&'static str, &'static str)> {
     let goos = if target.contains("windows") {
         "windows"
@@ -184,6 +211,7 @@ fn main() {
             .with_package("MacosNativeMenuSwift", "native/macos-native-menu")
             .link();
         link_macos_swift_runtime_rpaths();
+        add_swift_lib_search_paths();
     }
 
     tauri_build::build()
