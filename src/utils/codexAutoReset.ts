@@ -1,6 +1,7 @@
 import {
   CodexAccount,
   CodexResetCredit,
+  getCodexQuotaWindows,
   isCodexAgentIdentityAccount,
   isCodexApiKeyAccount,
   isCodexPendingOAuthAccount,
@@ -159,12 +160,71 @@ export function getCodexAvailableResetCreditsCount(
 }
 
 /**
+ * Resolves the effective weekly remaining quota percentage for an account.
+ * Accounts can have:
+ * 1. Dual windows: secondary is weekly (label "Weekly", ~7 days).
+ * 2. Single weekly window (e.g. Pro 5X accounts where primary window has 10080 minutes / label "Weekly").
+ * Returns the effective clamped/rounded percentage (0..100) matching what is shown in UI, or null if no weekly window exists.
+ */
+export function getCodexWeeklyQuotaPercentage(account: CodexAccount): number | null {
+  const quota = account?.quota;
+  if (!quota) return null;
+
+  const windows = getCodexQuotaWindows(quota);
+  if (windows.length > 0) {
+    // 1. Look for secondary window (in standard dual-window quota, secondary is weekly)
+    const secondaryWin = windows.find((w) => w.id === 'secondary');
+    if (
+      secondaryWin &&
+      typeof secondaryWin.percentage === 'number' &&
+      Number.isFinite(secondaryWin.percentage)
+    ) {
+      return secondaryWin.percentage;
+    }
+
+    // 2. Look for window whose label is "Weekly" or ends with "Week" or windowMinutes >= 6 days (8640 mins)
+    const weeklyWin = windows.find(
+      (w) =>
+        w.label === 'Weekly' ||
+        w.label.endsWith('Week') ||
+        (typeof w.windowMinutes === 'number' && w.windowMinutes >= 6 * 24 * 60),
+    );
+    if (
+      weeklyWin &&
+      typeof weeklyWin.percentage === 'number' &&
+      Number.isFinite(weeklyWin.percentage)
+    ) {
+      return weeklyWin.percentage;
+    }
+  }
+
+  // 3. Fallback direct check on quota fields
+  if (
+    quota.weekly_window_present === true &&
+    typeof quota.weekly_percentage === 'number' &&
+    Number.isFinite(quota.weekly_percentage)
+  ) {
+    return Math.round(quota.weekly_percentage);
+  }
+
+  if (
+    typeof quota.hourly_window_minutes === 'number' &&
+    quota.hourly_window_minutes >= 6 * 24 * 60 &&
+    typeof quota.hourly_percentage === 'number' &&
+    Number.isFinite(quota.hourly_percentage)
+  ) {
+    return Math.round(quota.hourly_percentage);
+  }
+
+  return null;
+}
+
+/**
  * Checks whether an account meets the trigger condition for auto-reset:
  * 1. Account is armed.
  * 2. Not an API key account or agent identity account.
  * 3. Has at least 1 available reset credit.
- * 4. Weekly window is present (or not explicitly marked false).
- * 5. Weekly quota percentage is finite and <= 1 (meaning <= 1% remaining).
+ * 4. Weekly window exists and effective weekly percentage is finite and <= 1 (meaning <= 1% remaining).
  */
 export function shouldTriggerCodexAutoReset(
   account: CodexAccount,
@@ -189,12 +249,8 @@ export function shouldTriggerCodexAutoReset(
     return false;
   }
 
-  if (account.quota?.weekly_window_present === false) {
-    return false;
-  }
-
-  const weeklyPercentage = account.quota?.weekly_percentage;
-  if (typeof weeklyPercentage !== 'number' || !Number.isFinite(weeklyPercentage)) {
+  const weeklyPercentage = getCodexWeeklyQuotaPercentage(account);
+  if (weeklyPercentage == null) {
     return false;
   }
 

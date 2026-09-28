@@ -6,6 +6,7 @@ import {
   disarmCodexAutoReset,
   getCodexAvailableResetCreditsCount,
   getCodexEarliestResetCreditExpiresAt,
+  getCodexWeeklyQuotaPercentage,
   isCodexAutoResetArmed,
   readArmedAccountIds,
   shouldTriggerCodexAutoReset,
@@ -169,6 +170,57 @@ describe('codexAutoReset helpers', () => {
       openai_api_key: 'sk-1234',
     };
     assert.equal(shouldTriggerCodexAutoReset(apiKeyAccount), false);
+
+    // Pro account with single weekly window (e.g. Pro 5X in user scenario)
+    armCodexAutoReset('acc-pro-single-window');
+    const proSingleWindowAccount: CodexAccount = {
+      id: 'acc-pro-single-window',
+      email: 'pro@example.com',
+      tokens: { access_token: 'tok' },
+      plan_type: 'pro',
+      created_at: Date.now(),
+      last_used: Date.now(),
+      quota: {
+        hourly_percentage: 1, // 1% weekly in primary window
+        hourly_window_minutes: 10080, // 7 days = 10080 mins
+        hourly_window_present: true,
+        weekly_percentage: 0,
+        weekly_window_present: false, // marked false because backend placed weekly in primary
+        reset_credits_available: 2,
+      },
+    };
+    assert.equal(getCodexWeeklyQuotaPercentage(proSingleWindowAccount), 1);
+    assert.equal(shouldTriggerCodexAutoReset(proSingleWindowAccount), true);
+
+    // Floating percentage that renders as 1% on UI (e.g. 1.2%)
+    armCodexAutoReset('acc-floating');
+    const floatingOnePointTwo = {
+      ...baseAccount,
+      id: 'acc-floating',
+      quota: { ...baseAccount.quota!, weekly_percentage: 1.2 },
+    };
+    assert.equal(getCodexWeeklyQuotaPercentage(floatingOnePointTwo), 1);
+    assert.equal(shouldTriggerCodexAutoReset(floatingOnePointTwo), true);
+
+    // 5h-only account with 1% remaining -> should NOT trigger because 5h is NOT weekly
+    armCodexAutoReset('acc-five-hour-only');
+    const fiveHourOnlyAccount: CodexAccount = {
+      id: 'acc-five-hour-only',
+      email: 'fivehour@example.com',
+      tokens: { access_token: 'tok' },
+      created_at: Date.now(),
+      last_used: Date.now(),
+      quota: {
+        hourly_percentage: 1,
+        hourly_window_minutes: 300, // 5 hours
+        hourly_window_present: true,
+        weekly_percentage: 0,
+        weekly_window_present: false,
+        reset_credits_available: 2,
+      },
+    };
+    assert.equal(getCodexWeeklyQuotaPercentage(fiveHourOnlyAccount), null);
+    assert.equal(shouldTriggerCodexAutoReset(fiveHourOnlyAccount), false);
 
     // Pending OAuth account -> should NOT trigger
     armCodexAutoReset('acc-pending');

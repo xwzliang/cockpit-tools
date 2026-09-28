@@ -46,6 +46,7 @@ import {
   readArmedAccountIds,
   shouldTriggerCodexAutoReset,
   subscribeCodexAutoReset,
+  subscribeCodexAutoResetExecuted,
 } from "../utils/codexAutoReset";
 
 /** 封装 useCodexAccountsPageController 的 useCodexAccountsBaseController 业务域状态与动作。 */
@@ -180,7 +181,7 @@ export function useCodexAccountsBaseController() {
       autoResetConfirmEarliestExpiresAt,
       setAutoResetConfirmEarliestExpiresAt,
     ] = useState<number | null>(null);
-    const [, setAutoResetRev] = useState(0);
+    const [autoResetRev, setAutoResetRev] = useState(0);
 
     useEffect(() => {
       return subscribeCodexAutoReset(() => {
@@ -2311,32 +2312,20 @@ export function useCodexAccountsBaseController() {
         text: t("codex.quota.autoResetArmedToast", "已开启周额度 ≤ 1% 自动重置"),
       });
 
-      if (shouldTriggerCodexAutoReset(account)) {
-        await executeCodexAutoResetIfEligible([account], {
+      const latestAccount =
+        store.accounts.find((a) => a.id === account.id) || account;
+
+      if (shouldTriggerCodexAutoReset(latestAccount)) {
+        await executeCodexAutoResetIfEligible([latestAccount], {
           consumeCredit: codexService.consumeCodexResetCredit,
           refreshQuota: store.refreshQuota,
-          onExecuted: (executedAccount) => {
-            const name = executedAccount.email || executedAccount.id;
-            setMessage({
-              text: t("codex.quota.autoResetExecutedToast", {
-                name,
-                defaultValue: `已自动为账号 ${name} 使用 1 次重置额度（周配额 ≤ 1%），自动重置已关闭。`,
-              }),
-            });
-          },
-          onError: (_failedAccount, error) => {
-            setMessage({
-              text: t("codex.quota.autoResetExecutionFailed", {
-                error: String(error).replace(/^Error:\s*/, ""),
-              }),
-            });
-          },
         });
       }
     }, [
       autoResetConfirmAccount,
       closeAutoResetConfirmModal,
       setMessage,
+      store.accounts,
       store.refreshQuota,
       t,
     ]);
@@ -2362,24 +2351,27 @@ export function useCodexAccountsBaseController() {
       void executeCodexAutoResetIfEligible(store.accounts, {
         consumeCredit: codexService.consumeCodexResetCredit,
         refreshQuota: store.refreshQuota,
-        onExecuted: (executedAccount) => {
-          const name = executedAccount.email || executedAccount.id;
+      });
+    }, [store.accounts, autoResetRev, store.refreshQuota]);
+
+    useEffect(() => {
+      return subscribeCodexAutoResetExecuted(({ accountName, success, error }) => {
+        if (success) {
           setMessage({
             text: t("codex.quota.autoResetExecutedToast", {
-              name,
-              defaultValue: `已自动为账号 ${name} 使用 1 次重置额度（周配额 ≤ 1%），自动重置已关闭。`,
+              name: accountName,
+              defaultValue: `已自动为账号 ${accountName} 使用 1 次重置额度（周配额 ≤ 1%），自动重置已关闭。`,
             }),
           });
-        },
-        onError: (_failedAccount, error) => {
+        } else if (error) {
           setMessage({
             text: t("codex.quota.autoResetExecutionFailed", {
-              error: String(error).replace(/^Error:\s*/, ""),
+              error,
             }),
           });
-        },
+        }
       });
-    }, [store.accounts, store.refreshQuota, setMessage, t]);
+    }, [setMessage, t]);
   
     const handleRefreshSubscriptionInfo = useCallback(
       async (accountId: string) => {
@@ -2800,6 +2792,7 @@ export function useCodexAccountsBaseController() {
     accounts,
     autoResetConfirmAccount,
     autoResetConfirmEarliestExpiresAt,
+    autoResetRev,
     closeAutoResetConfirmModal,
     handleConfirmArmAutoReset,
     handleToggleAutoReset,
