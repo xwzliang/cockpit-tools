@@ -37,6 +37,16 @@ import { isCodexLocalAccessRiskNoticeDismissed, setCodexLocalAccessRiskNoticeDis
 import { getMfaOtpToken, getMfaTimeRemaining, loadSavedMfaRecords, parseMfaCredentialInput, upsertSavedMfaRecord, type MfaRecord } from "../utils/mfaVault";
 import { findFirstMailVerificationCode } from "../utils/mailVerificationCode";
 import { ACTIVE_GROUP_ID_FIELD, buildCodexAccountNoteForm, buildExportFileName, CODEX_BATCH_IMPORT_SESSION_STORAGE_KEY, CODEX_FILTER_PERSISTENCE_SCOPE, CODEX_HIDE_RELAY_QUOTA_LEGACY_KEY, CODEX_LOCAL_ACCESS_EXPANDED_KEY, CODEX_OVERVIEW_LAYOUT_MODE_KEY, EMPTY_CODEX_ACCOUNT_NOTE_FORM, EXPIRY_FILTER_FIELD, FILTER_TYPES_FIELD, getCodexAccountNoteTitle, getDirectoryPath, GROUP_FILTER_FIELD, hasCodexAccountNoteDetails, hasCodexAccountNoteFormDetails, isHttpLikeUrl, joinFilePath, normalizeCodexOverviewLayoutMode, normalizeHttpBaseUrl, readStoredLocalAccessAddressKind, SEARCH_QUERY_FIELD, shouldAutoHideBatchDeleteJob, type CodexAccountNoteFieldErrors, type CodexAccountNoteFormState, type CodexAccountNoteMailPreviewSnapshot, type CodexAccountNoteMailPreviewState, type CodexBatchImportFilter, type CodexCliLaunchModalState, type CodexOverviewGeneralConfig, type CodexOverviewLayoutMode } from "./codexAccountsControllerModel";
+import {
+  armCodexAutoReset,
+  disarmCodexAutoReset,
+  executeCodexAutoResetIfEligible,
+  getCodexEarliestResetCreditExpiresAt,
+  isCodexAutoResetArmed,
+  readArmedAccountIds,
+  shouldTriggerCodexAutoReset,
+  subscribeCodexAutoReset,
+} from "../utils/codexAutoReset";
 
 /** 封装 useCodexAccountsPageController 的 useCodexAccountsBaseController 业务域状态与动作。 */
 export function useCodexAccountsBaseController() {
@@ -164,6 +174,19 @@ export function useCodexAccountsBaseController() {
       scrollKey: resetCreditConfirmErrorScrollKey,
       set: setResetCreditConfirmError,
     } = useModalErrorState();
+    const [autoResetConfirmAccount, setAutoResetConfirmAccount] =
+      useState<CodexAccount | null>(null);
+    const [
+      autoResetConfirmEarliestExpiresAt,
+      setAutoResetConfirmEarliestExpiresAt,
+    ] = useState<number | null>(null);
+    const [, setAutoResetRev] = useState(0);
+
+    useEffect(() => {
+      return subscribeCodexAutoReset(() => {
+        setAutoResetRev((v) => v + 1);
+      });
+    }, []);
     const [removingGroupAccountIds, setRemovingGroupAccountIds] = useState<
       Set<string>
     >(new Set());
@@ -2244,6 +2267,119 @@ export function useCodexAccountsBaseController() {
       setResetCreditConfirmError,
       t,
     ]);
+
+    const openAutoResetConfirmModal = useCallback(
+      (account: CodexAccount) => {
+        setAutoResetConfirmAccount(account);
+        const earliest = getCodexEarliestResetCreditExpiresAt(account);
+        setAutoResetConfirmEarliestExpiresAt(earliest);
+
+        void codexService
+          .getCodexResetCredits(account.id)
+          .then((snapshot) => {
+            const fromSnapshot =
+              snapshot.next_expires_at ??
+              snapshot.credits
+                .filter(isAvailableResetCredit)
+                .map((c) => c.expires_at)
+                .filter(
+                  (v): v is number =>
+                    typeof v === "number" && Number.isFinite(v),
+                )
+                .sort((a, b) => a - b)[0];
+            if (fromSnapshot) {
+              setAutoResetConfirmEarliestExpiresAt(fromSnapshot);
+            }
+          })
+          .catch(() => {});
+      },
+      [isAvailableResetCredit],
+    );
+
+    const closeAutoResetConfirmModal = useCallback(() => {
+      setAutoResetConfirmAccount(null);
+      setAutoResetConfirmEarliestExpiresAt(null);
+    }, []);
+
+    const handleConfirmArmAutoReset = useCallback(async () => {
+      const account = autoResetConfirmAccount;
+      if (!account) return;
+
+      armCodexAutoReset(account.id);
+      closeAutoResetConfirmModal();
+      setMessage({
+        text: t("codex.quota.autoResetArmedToast", "已开启周额度 ≤ 1% 自动重置"),
+      });
+
+      if (shouldTriggerCodexAutoReset(account)) {
+        await executeCodexAutoResetIfEligible([account], {
+          consumeCredit: codexService.consumeCodexResetCredit,
+          refreshQuota: store.refreshQuota,
+          onExecuted: (executedAccount) => {
+            const name = executedAccount.email || executedAccount.id;
+            setMessage({
+              text: t("codex.quota.autoResetExecutedToast", {
+                name,
+                defaultValue: `已自动为账号 ${name} 使用 1 次重置额度（周配额 ≤ 1%），自动重置已关闭。`,
+              }),
+            });
+          },
+          onError: (_failedAccount, error) => {
+            setMessage({
+              text: t("codex.quota.autoResetExecutionFailed", {
+                error: String(error).replace(/^Error:\s*/, ""),
+              }),
+            });
+          },
+        });
+      }
+    }, [
+      autoResetConfirmAccount,
+      closeAutoResetConfirmModal,
+      setMessage,
+      store.refreshQuota,
+      t,
+    ]);
+
+    const handleToggleAutoReset = useCallback(
+      (account: CodexAccount) => {
+        if (isCodexAutoResetArmed(account.id)) {
+          disarmCodexAutoReset(account.id);
+          setMessage({
+            text: t("codex.quota.autoResetDisarmedToast", "已关闭周额度自动重置"),
+          });
+        } else {
+          openAutoResetConfirmModal(account);
+        }
+      },
+      [openAutoResetConfirmModal, setMessage, t],
+    );
+
+    useEffect(() => {
+      const armedIds = readArmedAccountIds();
+      if (armedIds.size === 0) return;
+
+      void executeCodexAutoResetIfEligible(store.accounts, {
+        consumeCredit: codexService.consumeCodexResetCredit,
+        refreshQuota: store.refreshQuota,
+        onExecuted: (executedAccount) => {
+          const name = executedAccount.email || executedAccount.id;
+          setMessage({
+            text: t("codex.quota.autoResetExecutedToast", {
+              name,
+              defaultValue: `已自动为账号 ${name} 使用 1 次重置额度（周配额 ≤ 1%），自动重置已关闭。`,
+            }),
+          });
+        },
+        onError: (_failedAccount, error) => {
+          setMessage({
+            text: t("codex.quota.autoResetExecutionFailed", {
+              error: String(error).replace(/^Error:\s*/, ""),
+            }),
+          });
+        },
+      });
+    }, [store.accounts, store.refreshQuota, setMessage, t]);
   
     const handleRefreshSubscriptionInfo = useCallback(
       async (accountId: string) => {
@@ -2662,6 +2798,12 @@ export function useCodexAccountsBaseController() {
     accountNotePasswordVisible,
     accountNoteSecretVisible,
     accounts,
+    autoResetConfirmAccount,
+    autoResetConfirmEarliestExpiresAt,
+    closeAutoResetConfirmModal,
+    handleConfirmArmAutoReset,
+    handleToggleAutoReset,
+    openAutoResetConfirmModal,
     activeAccountNoteDisplayName,
     activeAccountNoteEmail,
     activeAccountNoteForm,

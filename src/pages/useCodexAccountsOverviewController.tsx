@@ -4,6 +4,7 @@ import * as codexService from "../services/codexService";
 import * as codexLocalAccessService from "../services/codexLocalAccessService";
 import { type CodexAccountGroup } from "../services/codexAccountGroupService";
 import { hasCodexAccountStructure, hasCodexAccountName, getCodexQuotaWindows, isCodexApiKeyAccount, isCodexAgentIdentityAccount, isCodexNewApiAccount, isCodexTeamLikePlan } from "../types/codex";
+import { isCodexAutoResetArmed } from "../utils/codexAutoReset";
 import { summarizeCodexQuotaErrorMessage } from "../utils/codexQuotaError";
 import { buildCodexAccountPresentation } from "../presentation/platformAccountPresentation";
 import { buildCodexAccountWindowStatQueries, formatCodexWindowStatsText, type CodexWindowStats } from "../utils/codexWindowStats";
@@ -67,6 +68,7 @@ export function useCodexAccountsOverviewController(context: Pick<ReturnType<type
   | "handleRefresh"
   | "handleRefreshSubscriptionInfo"
   | "handleRemoveLocalAccessAccount"
+  | "handleToggleAutoReset"
   | "hydrateAccountProfilesIfNeeded"
   | "isAbnormalAccount"
   | "isAllFilteredSelected"
@@ -183,6 +185,7 @@ export function useCodexAccountsOverviewController(context: Pick<ReturnType<type
     handleRefresh,
     handleRefreshSubscriptionInfo,
     handleRemoveLocalAccessAccount,
+    handleToggleAutoReset,
     hydrateAccountProfilesIfNeeded,
     isAbnormalAccount,
     isAllFilteredSelected,
@@ -1727,6 +1730,9 @@ export function useCodexAccountsOverviewController(context: Pick<ReturnType<type
           ? buildResetCreditsTitle(account, displayCount)
           : t("codex.quota.resetCreditDetailsTitle", "重置次数明细");
   
+      const isArmed = isCodexAutoResetArmed(account.id);
+      const canToggleAutoReset = (displayCount > 0 || isArmed) && !isDisabled;
+
       return (
         <div className="codex-reset-credit-row inline">
           <button
@@ -1745,6 +1751,24 @@ export function useCodexAccountsOverviewController(context: Pick<ReturnType<type
             )}
             {t("codex.quota.resetCredits", { count: displayCount })}
           </button>
+          {(displayCount > 0 || isArmed) && (
+            <label
+              className={`codex-auto-reset-checkbox ${isArmed ? "is-armed" : ""}`}
+              title={t(
+                "codex.quota.autoResetCheckboxTitle",
+                "周额度剩余 ≤ 1% 时自动消耗 1 次重置额度（单次有效）",
+              )}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="checkbox"
+                checked={isArmed}
+                disabled={!canToggleAutoReset}
+                onChange={() => handleToggleAutoReset(account)}
+              />
+              <span>{t("codex.quota.autoResetCheckbox", "≤1%自动重置")}</span>
+            </label>
+          )}
         </div>
       );
     };

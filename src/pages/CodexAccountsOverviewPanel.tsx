@@ -50,6 +50,10 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
     activeAccountNoteOtpToken,
     activeAccountNoteSaving,
     activeAccountUsesPersonalAccessToken,
+    autoResetConfirmAccount,
+    autoResetConfirmEarliestExpiresAt,
+    closeAutoResetConfirmModal,
+    handleConfirmArmAutoReset,
     activeGroup,
     activeGroupId,
     authFailedExportAccountIds,
@@ -2628,6 +2632,104 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
                       </>
                     ) : (
                       t("codex.quota.resetCreditDialogAction", "重置使用次数")
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {autoResetConfirmAccount && (
+            <div className="modal-overlay codex-reset-credit-confirm-overlay">
+              <div
+                className="modal codex-reset-credit-confirm-modal codex-auto-reset-confirm-modal"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="codex-reset-credit-confirm-visual">
+                  <button
+                    type="button"
+                    className="modal-close codex-reset-credit-confirm-close"
+                    onClick={closeAutoResetConfirmModal}
+                    aria-label={t("common.close", "关闭")}
+                  >
+                    <X />
+                  </button>
+                  <div className="codex-reset-credit-confirm-icon">
+                    <Terminal size={30} />
+                    <RotateCw
+                      size={18}
+                      className="codex-reset-credit-confirm-icon-badge"
+                    />
+                  </div>
+                </div>
+                <div className="modal-body codex-reset-credit-confirm-body">
+                  <h2>
+                    {t(
+                      "codex.quota.autoResetConfirmTitle",
+                      "开启周额度自动重置",
+                    )}
+                  </h2>
+                  <p>
+                    {t(
+                      "codex.quota.autoResetConfirmDesc",
+                      "当该账号周使用额度剩余 ≤ 1% 时，系统将自动使用 1 次最近到期的重置额度。",
+                    )}
+                  </p>
+                  <div className="codex-reset-credit-confirm-account">
+                    <span>{t("common.shared.columns.email", "账号")}</span>
+                    <strong>
+                      {maskAccountText(
+                        resolvePresentation(autoResetConfirmAccount)
+                          .displayName,
+                      )}
+                    </strong>
+                  </div>
+                  <div className="codex-reset-credit-confirm-expiry">
+                    <Clock size={14} />
+                    <span>
+                      {t(
+                        "codex.quota.autoResetCreditEarliestExpiry",
+                        "将使用的重置额度到期时间",
+                      )}
+                      ：
+                      <strong>
+                        {autoResetConfirmEarliestExpiresAt
+                          ? formatResetCreditTime(
+                              autoResetConfirmEarliestExpiresAt,
+                            )
+                          : t(
+                              "codex.quota.autoResetCreditTimeUnknown",
+                              "永久有效 / 无固定到期时间",
+                            )}
+                      </strong>
+                    </span>
+                  </div>
+                  <div className="codex-auto-reset-notice">
+                    <Info size={14} />
+                    <span>
+                      {t(
+                        "codex.quota.autoResetConfirmOneShotNotice",
+                        "执行一次后，自动重置将自动关闭（单次有效），不会重复消耗其他重置次数。",
+                      )}
+                    </span>
+                  </div>
+                </div>
+                <div className="modal-footer codex-reset-credit-confirm-footer">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={closeAutoResetConfirmModal}
+                  >
+                    {t("common.cancel", "取消")}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary codex-reset-credit-confirm-action"
+                    onClick={() => void handleConfirmArmAutoReset()}
+                  >
+                    {t(
+                      "codex.quota.autoResetConfirmAction",
+                      "确认开启",
                     )}
                   </button>
                 </div>

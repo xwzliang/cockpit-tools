@@ -87,6 +87,7 @@ import {
   migrateWorkbuddyAutoCheckinConfigAsync,
 } from './services/workbuddyAutoCheckinService';
 import { prepareCodexLocalAccessForRestart } from './services/codexLocalAccessService';
+import { executeCodexAutoResetIfEligible, readArmedAccountIds } from './utils/codexAutoReset';
 import { applyReducedMotion } from './utils/reducedMotion';
 import { isCodexInstanceAccountConflict } from './utils/codexInstanceLaunchConflict';
 import {
@@ -1042,6 +1043,15 @@ function MainApp() {
   // 初始化唤醒通知监听器
   useEffect(() => {
     initWakeupNotificationListener();
+  }, []);
+
+  // Codex 账号周配额 ≤ 1% 自动重置后台监听
+  useEffect(() => {
+    return useCodexAccountStore.subscribe((state) => {
+      const armedIds = readArmedAccountIds();
+      if (armedIds.size === 0) return;
+      void executeCodexAutoResetIfEligible(state.accounts);
+    });
   }, []);
 
   useEffect(() => {
