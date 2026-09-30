@@ -1,7 +1,9 @@
 use crate::models::codex::CodexAccount;
 use crate::models::ssh_server::{
-    SshAuthConfig, SshCodexSyncResult, SshCodexSyncStatus, SshServer, SshServerStore,
+    SshAntigravitySyncResult, SshAntigravitySyncStatus, SshAuthConfig, SshCodexSyncResult,
+    SshCodexSyncStatus, SshServer, SshServerStore,
 };
+use crate::models::Account;
 use crate::modules::{account, atomic_write, codex_account, logger};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
@@ -40,6 +42,10 @@ fn store_path() -> Result<PathBuf, String> {
 
 fn default_codex_home() -> String {
     "~/.codex".to_string()
+}
+
+fn default_antigravity_home() -> String {
+    "~/.gemini".to_string()
 }
 
 fn contains_control_separator(value: &str) -> bool {
@@ -134,6 +140,7 @@ fn validate_server(server: &SshServer) -> Result<(), String> {
         ("host", server.host.as_str()),
         ("username", server.username.as_str()),
         ("codex_home", server.codex_home.as_str()),
+        ("antigravity_home", server.antigravity_home.as_str()),
     ] {
         if value.trim().is_empty() {
             return Err(format!("SSH server {} is required", label));
@@ -179,6 +186,10 @@ fn normalize_server(
     if server.codex_home.is_empty() {
         server.codex_home = default_codex_home();
     }
+    server.antigravity_home = normalize_text(&server.antigravity_home);
+    if server.antigravity_home.is_empty() {
+        server.antigravity_home = default_antigravity_home();
+    }
     if server.port == 0 {
         server.port = 22;
     }
@@ -189,6 +200,9 @@ fn normalize_server(
     if let Some(existing) = existing {
         if server.last_sync.is_none() {
             server.last_sync = existing.last_sync.clone();
+        }
+        if server.last_antigravity_sync.is_none() {
+            server.last_antigravity_sync = existing.last_antigravity_sync.clone();
         }
     }
     validate_server(&server)?;
@@ -206,6 +220,14 @@ pub fn load_store() -> Result<SshServerStore, String> {
         .map_err(|e| format!("Failed to parse SSH servers store: {}", e))?;
     if store.version.trim().is_empty() {
         store.version = STORE_VERSION.to_string();
+    }
+    for server in &mut store.servers {
+        if server.antigravity_home.trim().is_empty() {
+            server.antigravity_home = default_antigravity_home();
+        }
+        if server.codex_home.trim().is_empty() {
+            server.codex_home = default_codex_home();
+        }
     }
     if let Some(selected_id) = store.selected_server_id.clone() {
         if !store.servers.iter().any(|server| server.id == selected_id) {
@@ -707,6 +729,464 @@ pub async fn sync_selected_server_after_codex_switch(
     Some(sync_account_to_server(server, account).await)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravityAccountProjectionBundle {
+    pub account_id: String,
+    pub account_email: String,
+    pub files: Vec<AntigravityProjectionFile>,
+    pub bundle_hash: String,
+    pub keyring_payload: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravityProjectionFile {
+    pub relative_path: String,
+    pub mode: u32,
+    pub sha256: String,
+    pub content: String,
+}
+
+fn sha256_hex_bytes(content: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(content);
+    format!("{:x}", hasher.finalize())
+}
+
+fn build_antigravity_bundle_hash(files: &[AntigravityProjectionFile]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for file in files {
+        hasher.update(file.relative_path.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(file.sha256.as_bytes());
+        hasher.update(b"\0");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+pub fn build_antigravity_projection_bundle(
+    account: &Account,
+) -> Result<AntigravityAccountProjectionBundle, String> {
+    let expiry = chrono::DateTime::from_timestamp(account.token.expiry_timestamp, 0)
+        .unwrap_or_else(chrono::Utc::now)
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+
+    let token_json = serde_json::json!({
+        "token": {
+            "access_token": account.token.access_token,
+            "token_type": "Bearer",
+            "refresh_token": account.token.refresh_token,
+            "expiry": expiry,
+        },
+        "auth_method": "consumer",
+        "id_token": account.token.id_token,
+    });
+    let token_content = serde_json::to_string_pretty(&token_json)
+        .map_err(|e| format!("序列化 Antigravity Token 失败: {}", e))?;
+
+    let keyring_json = serde_json::json!({
+        "token": {
+            "access_token": account.token.access_token,
+            "token_type": "Bearer",
+            "refresh_token": account.token.refresh_token,
+            "expiry": expiry,
+        },
+        "auth_method": "consumer",
+    });
+    let keyring_payload = serde_json::to_string(&keyring_json)
+        .map_err(|e| format!("序列化 Antigravity Keyring 凭据失败: {}", e))?;
+
+    let marker_json = serde_json::json!({
+        "account_id": account.id,
+        "account_email": account.email,
+        "synced_at": now_timestamp(),
+        "source": "cockpit-tools",
+    });
+    let marker_content = serde_json::to_string_pretty(&marker_json)
+        .map_err(|e| format!("序列化 Antigravity 投影标记失败: {}", e))?;
+
+    let files = vec![
+        AntigravityProjectionFile {
+            relative_path: "jetski-standalone-oauth-token".to_string(),
+            mode: 0o600,
+            sha256: sha256_hex_bytes(token_content.as_bytes()),
+            content: token_content,
+        },
+        AntigravityProjectionFile {
+            relative_path: ".cockpit_antigravity_auth.json".to_string(),
+            mode: 0o600,
+            sha256: sha256_hex_bytes(marker_content.as_bytes()),
+            content: marker_content,
+        },
+    ];
+
+    let bundle_hash = build_antigravity_bundle_hash(&files);
+
+    Ok(AntigravityAccountProjectionBundle {
+        account_id: account.id.clone(),
+        account_email: account.email.clone(),
+        files,
+        bundle_hash,
+        keyring_payload,
+    })
+}
+
+async fn upload_and_verify_antigravity_bundle(
+    server: &SshServer,
+    bundle: &AntigravityAccountProjectionBundle,
+) -> Result<(), String> {
+    let mut payload = String::new();
+    for file in &bundle.files {
+        payload.push_str(&format!(
+            "{}\t{:o}\t{}\t{}\n",
+            file.relative_path,
+            file.mode,
+            file.sha256,
+            STANDARD.encode(file.content.as_bytes())
+        ));
+    }
+    let keyring_payload_b64 = STANDARD.encode(bundle.keyring_payload.as_bytes());
+
+    let script = format!(
+        r#"set -eu
+antigravity_home=$1
+case "$antigravity_home" in
+  "~") antigravity_home="$HOME" ;;
+  "~/"*) antigravity_home="$HOME/${{antigravity_home#~/}}" ;;
+esac
+mkdir -p "$antigravity_home"
+chmod 700 "$antigravity_home" 2>/dev/null || true
+tmp_dir="$antigravity_home/.cockpit-antigravity-sync.$$"
+rm -rf "$tmp_dir"
+mkdir -p "$tmp_dir"
+cleanup() {{ rm -rf "$tmp_dir"; }}
+trap cleanup EXIT INT TERM
+cat <<'__COCKPIT_ANTIGRAVITY_PAYLOAD__' | while IFS='	' read -r rel mode expected encoded; do
+{payload}__COCKPIT_ANTIGRAVITY_PAYLOAD__
+  [ -n "$rel" ] || continue
+  case "$rel" in
+    jetski-standalone-oauth-token|.cockpit_antigravity_auth.json) ;;
+    *) printf 'invalid relative path: %s\n' "$rel" >&2; exit 4 ;;
+  esac
+  tmp="$tmp_dir/$rel"
+  target="$antigravity_home/$rel"
+  if ! printf '%s' "$encoded" | base64 -d > "$tmp" 2>/dev/null; then
+    printf '%s' "$encoded" | base64 -D > "$tmp"
+  fi
+  chmod "$mode" "$tmp" 2>/dev/null || true
+  mv "$tmp" "$target"
+  chmod "$mode" "$target" 2>/dev/null || true
+  actual="$(sha256sum "$target" 2>/dev/null | awk '{{print $1}}' || shasum -a 256 "$target" | awk '{{print $1}}')"
+  if [ "$actual" != "$expected" ]; then
+    printf 'hash mismatch for %s\n' "$rel" >&2
+    exit 5
+  fi
+  printf '%s\t%s\n' "$rel" "$actual"
+done
+
+# Try updating Linux Secret Service (GNOME Keyring / secret-tool / python dbus) if active user bus exists
+USER_BUS="/run/user/$(id -u)/bus"
+if [ -S "$USER_BUS" ]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$USER_BUS"
+  payload_content=$(printf '%s' '{keyring_payload_b64}' | (base64 -d 2>/dev/null || base64 -D 2>/dev/null || true))
+  if command -v secret-tool >/dev/null 2>&1; then
+    printf '%s' "$payload_content" | secret-tool store --label=gemini service gemini username antigravity 2>/dev/null || true
+  elif command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$payload_content" | python3 -c '
+import os, sys
+try:
+    import dbus
+    uid = os.getuid()
+    bus_path = f"/run/user/{{uid}}/bus"
+    if not os.path.exists(bus_path):
+        sys.exit(0)
+    bus = dbus.bus.BusConnection(f"unix:path={{bus_path}}")
+    ss = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")
+    ss_iface = dbus.Interface(ss, "org.freedesktop.Secret.Service")
+    session_path = ss_iface.OpenSession("plain", dbus.String("", variant_level=1))[1]
+    raw_payload = sys.stdin.read().strip().encode("utf-8")
+    default_coll = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets/aliases/default")
+    coll_iface = dbus.Interface(default_coll, "org.freedesktop.Secret.Collection")
+    props = {{
+        "org.freedesktop.Secret.Item.Label": dbus.String("gemini", variant_level=1),
+        "org.freedesktop.Secret.Item.Attributes": dbus.Dictionary({{
+            "service": "gemini",
+            "username": "antigravity",
+            "xdg:schema": "org.freedesktop.Secret.Generic",
+        }}, signature="ss", variant_level=1),
+    }}
+    secret_struct = (
+        dbus.ObjectPath(session_path),
+        dbus.Array([], signature="y"),
+        dbus.Array(list(raw_payload), signature="y"),
+        "text/plain; charset=utf-8",
+    )
+    coll_iface.CreateItem(props, secret_struct, True)
+except Exception:
+    sys.exit(0)
+' 2>/dev/null || true
+  fi
+fi
+
+# Ensure agy CLI wrapper is in place so SSH terminals can access keyring auth
+for agy_dir in "$HOME/.local/bin" "/usr/local/bin"; do
+  if [ -f "$agy_dir/agy" ] && file "$agy_dir/agy" 2>/dev/null | grep -q 'ELF'; then
+    mv "$agy_dir/agy" "$agy_dir/agy.real"
+    cat > "$agy_dir/agy" << 'EOF_AGY'
+#!/usr/bin/env sh
+if [ -z "${{DBUS_SESSION_BUS_ADDRESS:-}}" ] && [ -S "/run/user/$(id -u)/bus" ]; then
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+fi
+DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REAL_BIN="$DIR/agy.real"
+if [ ! -x "$REAL_BIN" ]; then
+  REAL_BIN="$(which agy.real 2>/dev/null || true)"
+fi
+if [ -x "$REAL_BIN" ]; then
+  exec env -u SSH_CONNECTION -u SSH_CLIENT -u SSH_TTY "$REAL_BIN" "$@"
+fi
+exec "$0.real" "$@"
+EOF_AGY
+    chmod +x "$agy_dir/agy"
+  fi
+done
+"#
+    );
+    let output = run_ssh(
+        server,
+        SYNC_TIMEOUT_SECS,
+        &["sh", "-s", "--", &server.antigravity_home],
+        Some(script),
+    )
+    .await
+    .map_err(|e| format!("ssh_remote_write_failed: {}", sanitize_error(e)))?;
+
+    for file in &bundle.files {
+        let verified = output
+            .lines()
+            .any(|line| line == format!("{}\t{}", file.relative_path, file.sha256));
+        if !verified {
+            return Err(format!(
+                "ssh_remote_verify_failed: missing verification for {}",
+                file.relative_path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn result_from_antigravity_status(
+    server: &SshServer,
+    status: SshAntigravitySyncStatus,
+) -> SshAntigravitySyncResult {
+    SshAntigravitySyncResult {
+        server_id: server.id.clone(),
+        server_name: server.name.clone(),
+        account_id: status.account_id,
+        account_email: status.account_email,
+        bundle_hash: status.bundle_hash,
+        verified: status.verified,
+        error: status.error,
+        synced_at: status.synced_at,
+    }
+}
+
+fn persist_antigravity_sync_status(
+    server_id: &str,
+    status: SshAntigravitySyncStatus,
+) -> Result<SshAntigravitySyncResult, String> {
+    let mut store = load_store()?;
+    let index = store
+        .servers
+        .iter()
+        .position(|server| server.id == server_id)
+        .ok_or_else(|| format!("SSH server not found: {}", server_id))?;
+    store.servers[index].last_antigravity_sync = Some(status.clone());
+    store.servers[index].updated_at = now_timestamp();
+    let result = result_from_antigravity_status(&store.servers[index], status);
+    save_store(&store)?;
+    Ok(result)
+}
+
+fn reload_antigravity_script() -> &'static str {
+    r#"set -eu
+main_pid=""
+main_exe=""
+main_display=""
+main_xauth=""
+
+for p in $(pgrep -u "$(id -u)" -f antigravity 2>/dev/null || true); do
+  [ -d "/proc/$p" ] || continue
+  exe=$(readlink -f "/proc/$p/exe" 2>/dev/null || true)
+  cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || true)
+  case "$exe" in
+    */antigravity)
+      case "$cmd" in
+        *--type=*) ;;
+        *)
+          main_pid="$p"
+          main_exe="$exe"
+          main_display=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep '^DISPLAY=' | head -n 1 || true)
+          main_xauth=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep '^XAUTHORITY=' | head -n 1 || true)
+          break
+          ;;
+      esac
+      ;;
+  esac
+done
+
+all_pids=$(pgrep -u "$(id -u)" -f "antigravity|language_server" 2>/dev/null || true)
+if [ -z "$all_pids" ] && [ -z "$main_pid" ]; then
+  printf 'no-antigravity-process\n'
+  exit 0
+fi
+
+for p in $all_pids; do
+  kill -TERM "$p" 2>/dev/null || true
+done
+sleep 2
+
+for p in $all_pids; do
+  if kill -0 "$p" 2>/dev/null; then
+    kill -KILL "$p" 2>/dev/null || true
+  fi
+done
+sleep 1
+
+if [ -n "$main_exe" ] && [ -x "$main_exe" ]; then
+  [ -n "$main_display" ] && eval "export $main_display"
+  [ -n "$main_xauth" ] && eval "export $main_xauth"
+  "$main_exe" </dev/null >/dev/null 2>&1 &
+  printf 'desktop-relaunched\n'
+  exit 0
+fi
+
+printf 'processes-terminated\n'
+exit 0
+"#
+}
+
+async fn reload_remote_antigravity_server(server: &SshServer) -> Result<(), String> {
+    let output = run_ssh(
+        server,
+        APP_SERVER_RELOAD_TIMEOUT_SECS,
+        &["sh", "-s"],
+        Some(reload_antigravity_script().to_string()),
+    )
+    .await
+    .map_err(|e| format!("ssh_remote_antigravity_reload_failed: {}", sanitize_error(e)))?;
+
+    let status = output
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    if matches!(
+        status,
+        "desktop-relaunched" | "processes-terminated" | "no-antigravity-process"
+    ) {
+        Ok(())
+    } else {
+        Err(format!(
+            "ssh_remote_antigravity_reload_failed: unexpected reload response: {}",
+            sanitize_error(status)
+        ))
+    }
+}
+
+async fn sync_antigravity_account_to_server(
+    server: SshServer,
+    account: &Account,
+) -> SshAntigravitySyncResult {
+    let synced_at = now_timestamp();
+    let sync_attempt = async {
+        validate_server(&server)?;
+        let bundle = build_antigravity_projection_bundle(account)
+            .map_err(|e| format!("antigravity_bundle_failed: {}", sanitize_error(e)))?;
+        upload_and_verify_antigravity_bundle(&server, &bundle).await?;
+        if let Err(reload_error) = reload_remote_antigravity_server(&server).await {
+            logger::log_warn(&format!(
+                "[Antigravity SSH] 远端进程刷新失败（鉴权已写入）: server_id={}, error={}",
+                server.id, reload_error
+            ));
+        }
+        Ok::<_, String>(bundle)
+    }
+    .await;
+
+    let status = match sync_attempt {
+        Ok(bundle) => SshAntigravitySyncStatus {
+            account_id: bundle.account_id,
+            account_email: bundle.account_email,
+            bundle_hash: bundle.bundle_hash,
+            synced_at,
+            verified: true,
+            error: None,
+        },
+        Err(error) => SshAntigravitySyncStatus {
+            account_id: account.id.clone(),
+            account_email: account.email.clone(),
+            bundle_hash: String::new(),
+            synced_at,
+            verified: false,
+            error: Some(sanitize_error(error)),
+        },
+    };
+
+    match persist_antigravity_sync_status(&server.id, status.clone()) {
+        Ok(result) => result,
+        Err(error) => {
+            logger::log_warn(&format!(
+                "[Antigravity SSH] 保存同步状态失败: server_id={}, error={}",
+                server.id, error
+            ));
+            result_from_antigravity_status(&server, status)
+        }
+    }
+}
+
+pub async fn sync_current_antigravity_account_to_server(
+    server_id: Option<String>,
+) -> Result<SshAntigravitySyncResult, String> {
+    let account = account::get_current_account()?
+        .ok_or_else(|| "antigravity_sync_failed: no current Antigravity account".to_string())?;
+    let store = load_store()?;
+    let server = if let Some(server_id) = server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        store
+            .servers
+            .iter()
+            .find(|server| server.id == server_id)
+            .cloned()
+            .ok_or_else(|| format!("SSH server not found: {}", server_id))?
+    } else {
+        selected_server_from_store(&store)
+            .ok_or_else(|| "ssh_not_configured: no selected SSH server".to_string())?
+    };
+    Ok(sync_antigravity_account_to_server(server, &account).await)
+}
+
+pub async fn sync_selected_server_after_antigravity_switch(
+    account: &Account,
+) -> Option<SshAntigravitySyncResult> {
+    let store = match load_store() {
+        Ok(store) => store,
+        Err(error) => {
+            logger::log_warn(&format!("[Antigravity SSH] 读取 SSH 服务器配置失败: {}", error));
+            return None;
+        }
+    };
+    let server = selected_server_from_store(&store)?;
+    if !server.sync_on_antigravity_switch {
+        return None;
+    }
+    Some(sync_antigravity_account_to_server(server, account).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,11 +1226,14 @@ mod tests {
             port: 22,
             username: "alice".to_string(),
             codex_home: "~/.codex".to_string(),
+            antigravity_home: "~/.gemini".to_string(),
             auth: SshAuthConfig::Agent,
             sync_on_codex_switch: true,
+            sync_on_antigravity_switch: false,
             created_at: 1,
             updated_at: 1,
             last_sync: None,
+            last_antigravity_sync: None,
         }
     }
 
@@ -823,6 +1306,67 @@ mod tests {
         assert!(!sanitized.contains("sk-test"));
     }
 
+    #[test]
+    fn validation_rejects_empty_antigravity_home() {
+        let mut server = valid_server();
+        server.antigravity_home.clear();
+        assert!(validate_server(&server).is_err());
+    }
+
+    #[test]
+    fn build_antigravity_bundle_generates_valid_files() {
+        use crate::models::token::TokenData;
+
+        let token = TokenData::new(
+            "test_access_token".to_string(),
+            "test_refresh_token".to_string(),
+            3600,
+            Some("user@example.com".to_string()),
+            None,
+            None,
+        );
+        let account = Account::new(
+            "test_id".to_string(),
+            "user@example.com".to_string(),
+            token,
+        );
+
+        let bundle = build_antigravity_projection_bundle(&account).unwrap();
+        assert_eq!(bundle.account_id, "test_id");
+        assert_eq!(bundle.account_email, "user@example.com");
+        assert_eq!(bundle.files.len(), 2);
+
+        let oauth_file = bundle
+            .files
+            .iter()
+            .find(|f| f.relative_path == "jetski-standalone-oauth-token")
+            .unwrap();
+        assert_eq!(oauth_file.mode, 0o600);
+        assert!(oauth_file.content.contains("test_access_token"));
+        assert!(oauth_file.content.contains("test_refresh_token"));
+        assert!(oauth_file.content.contains("consumer"));
+
+        let marker_file = bundle
+            .files
+            .iter()
+            .find(|f| f.relative_path == ".cockpit_antigravity_auth.json")
+            .unwrap();
+        assert_eq!(marker_file.mode, 0o600);
+        assert!(marker_file.content.contains("cockpit-tools"));
+    }
+
+    #[test]
+    fn antigravity_reload_script_contains_process_detection_and_relaunch() {
+        let script = reload_antigravity_script();
+        assert!(script.contains("antigravity"));
+        assert!(script.contains("language_server"));
+        assert!(script.contains("desktop-relaunched"));
+        assert!(script.contains("processes-terminated"));
+        assert!(script.contains("no-antigravity-process"));
+        assert!(script.contains("DISPLAY="));
+        assert!(script.contains("XAUTHORITY="));
+    }
+
     #[tokio::test]
     #[ignore]
     async fn live_ssh_own_syncs_current_codex_account() {
@@ -842,11 +1386,14 @@ mod tests {
             port: 22,
             username: "ubuntu".to_string(),
             codex_home: "~/.codex".to_string(),
+            antigravity_home: "~/.gemini".to_string(),
             auth: SshAuthConfig::Agent,
             sync_on_codex_switch: true,
+            sync_on_antigravity_switch: false,
             created_at: now,
             updated_at: now,
             last_sync: None,
+            last_antigravity_sync: None,
         };
         let store = SshServerStore {
             version: STORE_VERSION.to_string(),
@@ -870,5 +1417,39 @@ mod tests {
         assert_eq!(result.account_id, current.id);
         assert_eq!(result.account_email, current.email);
         assert_eq!(result.token_generation, current.token_generation);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_ssh_server_syncs_current_antigravity_account() {
+        let home = dirs::home_dir().expect("get home dir");
+        let real_cockpit_dir = home.join(".antigravity_cockpit");
+        std::env::set_var("COCKPIT_TOOLS_DATA_DIR", &real_cockpit_dir);
+
+        let current = account::get_current_account()
+            .expect("read current antigravity account")
+            .expect("a current Antigravity account is required for live SSH sync");
+        let store = load_store().expect("load store");
+        let server = store
+            .servers
+            .into_iter()
+            .find(|s| s.name == "server" || s.host == "server" || s.host == "pve-ubuntu.local")
+            .expect("ssh server named 'server' not found");
+
+        test_connection(&server.id)
+            .await
+            .expect("ssh connection test should pass");
+
+        let result = sync_current_antigravity_account_to_server(Some(server.id.clone()))
+            .await
+            .expect("sync current antigravity account to server");
+
+        assert!(
+            result.verified,
+            "live SSH sync should verify remote hashes: {:?}",
+            result.error
+        );
+        assert_eq!(result.account_id, current.id);
+        assert_eq!(result.account_email, current.email);
     }
 }

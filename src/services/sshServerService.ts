@@ -1,5 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { SshCodexSyncResult, SshServer, SshServerDraft, SshServerList } from '../types/sshServer';
+import type {
+  SshAntigravitySyncResult,
+  SshCodexSyncResult,
+  SshServer,
+  SshServerDraft,
+  SshServerList,
+} from '../types/sshServer';
 
 function toServer(draft: SshServerDraft): SshServer {
   return {
@@ -9,11 +15,14 @@ function toServer(draft: SshServerDraft): SshServer {
     port: draft.port ?? 22,
     username: draft.username,
     codex_home: draft.codex_home?.trim() || '~/.codex',
+    antigravity_home: draft.antigravity_home?.trim() || '~/.gemini',
     auth: draft.auth,
     sync_on_codex_switch: draft.sync_on_codex_switch ?? true,
+    sync_on_antigravity_switch: draft.sync_on_antigravity_switch ?? false,
     created_at: 0,
     updated_at: 0,
     last_sync: null,
+    last_antigravity_sync: null,
   };
 }
 
@@ -41,6 +50,14 @@ export async function syncCurrentCodexAccountToSshServer(
   serverId?: string | null,
 ): Promise<SshCodexSyncResult> {
   return await invoke('sync_current_codex_account_to_ssh_server', {
+    serverId: serverId ?? null,
+  });
+}
+
+export async function syncCurrentAntigravityAccountToSshServer(
+  serverId?: string | null,
+): Promise<SshAntigravitySyncResult> {
+  return await invoke('sync_current_antigravity_account_to_ssh_server', {
     serverId: serverId ?? null,
   });
 }

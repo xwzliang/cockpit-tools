@@ -68,6 +68,7 @@ import {
   setAccountsOverviewFilterPersistenceEnabled,
 } from '../utils/accountsOverviewFilterPersistence';
 import { CodexSshSyncSettingsControl } from './codex/CodexSshSyncSettingsControl';
+import { AntigravitySshSyncSettingsControl } from './AntigravitySshSyncSettingsControl';
 import { CodexContextManagementControl } from './codex/CodexContextManagementControl';
 import { getCodexExperimentalModelErrorMessage } from '../utils/codexExperimentalModel';
 import { CodexExperimentalModelEditor } from './codex/CodexExperimentalModelEditor';
@@ -2336,6 +2337,7 @@ export function QuickSettingsPopover({ type }: QuickSettingsPopoverProps) {
                         '关闭后切号只写入 Antigravity 默认账号数据，不会关闭、启动或重启应用。',
                       )}
                     </div>
+                    <AntigravitySshSyncSettingsControl variant="quick" />
                   </>
                 )}
                 {config && (type !== 'antigravity' || antigravityLaunchOnSwitch) && (

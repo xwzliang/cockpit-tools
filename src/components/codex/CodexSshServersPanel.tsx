@@ -26,9 +26,11 @@ interface FormState {
   port: string;
   username: string;
   codexHome: string;
+  antigravityHome: string;
   authKind: 'agent' | 'private_key_file';
   privateKeyPath: string;
   syncOnSwitch: boolean;
+  syncOnAntigravitySwitch: boolean;
 }
 
 const emptyForm: FormState = {
@@ -37,9 +39,11 @@ const emptyForm: FormState = {
   port: '22',
   username: '',
   codexHome: '~/.codex',
+  antigravityHome: '~/.gemini',
   authKind: 'agent',
   privateKeyPath: '',
   syncOnSwitch: true,
+  syncOnAntigravitySwitch: false,
 };
 
 function formFromServer(server: SshServer): FormState {
@@ -50,9 +54,11 @@ function formFromServer(server: SshServer): FormState {
     port: String(server.port || 22),
     username: server.username,
     codexHome: server.codex_home || '~/.codex',
+    antigravityHome: server.antigravity_home || '~/.gemini',
     authKind: server.auth.kind,
     privateKeyPath: server.auth.kind === 'private_key_file' ? server.auth.path : '',
     syncOnSwitch: server.sync_on_codex_switch,
+    syncOnAntigravitySwitch: server.sync_on_antigravity_switch ?? false,
   };
 }
 
@@ -68,8 +74,10 @@ function draftFromForm(form: FormState): SshServerDraft {
     port: Number.parseInt(form.port, 10) || 22,
     username: form.username.trim(),
     codex_home: form.codexHome.trim() || '~/.codex',
+    antigravity_home: form.antigravityHome.trim() || '~/.gemini',
     auth,
     sync_on_codex_switch: form.syncOnSwitch,
+    sync_on_antigravity_switch: form.syncOnAntigravitySwitch,
   };
 }
 
@@ -97,6 +105,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
     selectServer,
     testConnection,
     syncNow,
+    syncAntigravityNow,
     applySyncResult,
   } = useSshServerStore();
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -147,8 +156,8 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
     try {
       const draft = draftFromForm(form);
       await upsertServer(draft);
-      // 开启「切号同步」时自动选中该服务器，设置里的开关会点亮
-      if (draft.sync_on_codex_switch) {
+      // 开启任一切号同步时自动选中该服务器，设置里的开关会点亮
+      if (draft.sync_on_codex_switch || draft.sync_on_antigravity_switch) {
         const list = useSshServerStore.getState().servers;
         const matched =
           list.find(
@@ -194,8 +203,26 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
       setLocalMessage({
         kind: result.verified ? 'success' : 'warning',
         text: result.verified
-          ? t('codex.ssh.syncVerified', 'SSH 已校验同步成功')
-          : result.error ?? t('codex.ssh.syncFailed', 'SSH 同步失败'),
+          ? t('codex.ssh.syncVerified', 'Codex SSH 已校验同步成功')
+          : result.error ?? t('codex.ssh.syncFailed', 'Codex SSH 同步失败'),
+      });
+    } catch (err) {
+      setLocalMessage({ kind: 'error', text: String(err) });
+    } finally {
+      setBusyServerId(null);
+    }
+  };
+
+  const handleSyncAntigravity = async (serverId?: string) => {
+    setBusyServerId(serverId ?? selectedServerId);
+    setLocalMessage(null);
+    try {
+      const result = await syncAntigravityNow(serverId);
+      setLocalMessage({
+        kind: result.verified ? 'success' : 'warning',
+        text: result.verified
+          ? t('antigravity.ssh.syncVerified', 'Antigravity SSH 已校验同步成功')
+          : result.error ?? t('antigravity.ssh.syncFailed', 'Antigravity SSH 同步失败'),
       });
     } catch (err) {
       setLocalMessage({ kind: 'error', text: String(err) });
@@ -347,6 +374,18 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
               </label>
             </div>
 
+            <label className="codex-ssh-panel__field">
+              <span>{t('antigravity.ssh.antigravityHome', '远端 Antigravity 目录')}</span>
+              <input
+                className="form-input"
+                value={form.antigravityHome}
+                onChange={(event) =>
+                  setForm({ ...form, antigravityHome: event.target.value })
+                }
+                placeholder="~/.gemini"
+              />
+            </label>
+
             <div className="codex-ssh-panel__auth">
               <span className="codex-ssh-panel__field-label">
                 {t('codex.ssh.authMethod', '认证方式')}
@@ -394,7 +433,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
 
             <label className="codex-ssh-panel__switch-card">
               <span className="codex-ssh-panel__switch-copy">
-                <strong>{t('codex.ssh.syncOnSwitch', '切号后自动同步')}</strong>
+                <strong>{t('codex.ssh.syncOnSwitch', 'Codex 切号后自动同步')}</strong>
                 <em>
                   {t(
                     'codex.ssh.syncOnSwitchHint',
@@ -408,6 +447,28 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                   checked={form.syncOnSwitch}
                   onChange={(event) =>
                     setForm({ ...form, syncOnSwitch: event.target.checked })
+                  }
+                />
+                <span className="codex-ssh-panel__switch-slider" />
+              </span>
+            </label>
+
+            <label className="codex-ssh-panel__switch-card">
+              <span className="codex-ssh-panel__switch-copy">
+                <strong>{t('antigravity.ssh.syncOnSwitch', 'Antigravity 切号后自动同步')}</strong>
+                <em>
+                  {t(
+                    'antigravity.ssh.syncOnSwitchHint',
+                    '保存并选中后，Antigravity 切号会推送鉴权到这台主机',
+                  )}
+                </em>
+              </span>
+              <span className="codex-ssh-panel__switch">
+                <input
+                  type="checkbox"
+                  checked={form.syncOnAntigravitySwitch}
+                  onChange={(event) =>
+                    setForm({ ...form, syncOnAntigravitySwitch: event.target.checked })
                   }
                 />
                 <span className="codex-ssh-panel__switch-slider" />
@@ -497,7 +558,12 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                           )}
                           {server.sync_on_codex_switch && (
                             <span className="codex-ssh-panel__badge codex-ssh-panel__badge--soft">
-                              {t('codex.ssh.autoSyncBadge', '自动同步')}
+                              Codex 同步
+                            </span>
+                          )}
+                          {server.sync_on_antigravity_switch && (
+                            <span className="codex-ssh-panel__badge codex-ssh-panel__badge--soft">
+                              Antigravity 同步
                             </span>
                           )}
                         </div>
@@ -507,24 +573,45 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                           </code>
                           <span className="codex-ssh-panel__dot">·</span>
                           <span>{server.codex_home}</span>
+                          <span className="codex-ssh-panel__dot">·</span>
+                          <span>{server.antigravity_home || '~/.gemini'}</span>
                         </div>
                       </div>
                     </div>
 
-                    <div
-                      className={`codex-ssh-panel__sync-status${
-                        sync?.verified ? ' is-ok' : sync ? ' is-fail' : ''
-                      }`}
-                    >
-                      {sync
-                        ? sync.verified
-                          ? t('codex.ssh.syncedAs', '已同步 {{email}} · {{time}}', {
-                              email: sync.account_email,
-                              time: formatSyncTime(sync.synced_at),
-                            })
-                          : sync.error ??
-                            t('codex.ssh.syncFailed', 'SSH 同步失败')
-                        : t('codex.ssh.neverSynced', '尚未同步')}
+                    <div className="codex-ssh-panel__sync-status-group" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div
+                        className={`codex-ssh-panel__sync-status${
+                          sync?.verified ? ' is-ok' : sync ? ' is-fail' : ''
+                        }`}
+                      >
+                        <span style={{ opacity: 0.75, marginRight: 4 }}>[Codex]</span>
+                        {sync
+                          ? sync.verified
+                            ? t('codex.ssh.syncedAs', '已同步 {{email}} · {{time}}', {
+                                email: sync.account_email,
+                                time: formatSyncTime(sync.synced_at),
+                              })
+                            : sync.error ??
+                              t('codex.ssh.syncFailed', 'SSH 同步失败')
+                          : t('codex.ssh.neverSynced', '尚未同步')}
+                      </div>
+                      {server.last_antigravity_sync && (
+                        <div
+                          className={`codex-ssh-panel__sync-status${
+                            server.last_antigravity_sync.verified ? ' is-ok' : ' is-fail'
+                          }`}
+                        >
+                          <span style={{ opacity: 0.75, marginRight: 4 }}>[Antigravity]</span>
+                          {server.last_antigravity_sync.verified
+                            ? t('antigravity.ssh.syncedAs', '已同步 {{email}} · {{time}}', {
+                                email: server.last_antigravity_sync.account_email,
+                                time: formatSyncTime(server.last_antigravity_sync.synced_at),
+                              })
+                            : server.last_antigravity_sync.error ??
+                              t('antigravity.ssh.syncFailed', 'SSH 同步失败')}
+                        </div>
+                      )}
                     </div>
                   </button>
 
@@ -557,10 +644,21 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                       className="btn btn-secondary"
                       type="button"
                       disabled={busy}
+                      title={t('codex.ssh.syncCodex', '同步当前 Codex 账号')}
                       onClick={() => void handleSync(server.id)}
                     >
                       <KeyRound size={14} />
-                      <span>{t('codex.ssh.syncNow', '同步')}</span>
+                      <span>{t('codex.ssh.syncCodexShort', '同步 Codex')}</span>
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      disabled={busy}
+                      title={t('antigravity.ssh.syncAntigravity', '同步当前 Antigravity 账号')}
+                      onClick={() => void handleSyncAntigravity(server.id)}
+                    >
+                      <KeyRound size={14} />
+                      <span>{t('antigravity.ssh.syncAntigravityShort', '同步 Antigravity')}</span>
                     </button>
                     <button
                       className="btn btn-secondary icon-only"

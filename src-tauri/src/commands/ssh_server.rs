@@ -1,4 +1,6 @@
-use crate::models::ssh_server::{SshCodexSyncResult, SshServer};
+use crate::models::ssh_server::{
+    SshAntigravitySyncResult, SshCodexSyncResult, SshServer,
+};
 use crate::modules::ssh_server::{self, SshServerList};
 
 #[tauri::command]
@@ -31,4 +33,11 @@ pub async fn sync_current_codex_account_to_ssh_server(
     server_id: Option<String>,
 ) -> Result<SshCodexSyncResult, String> {
     ssh_server::sync_current_account_to_server(server_id).await
+}
+
+#[tauri::command]
+pub async fn sync_current_antigravity_account_to_ssh_server(
+    server_id: Option<String>,
+) -> Result<SshAntigravitySyncResult, String> {
+    ssh_server::sync_current_antigravity_account_to_server(server_id).await
 }

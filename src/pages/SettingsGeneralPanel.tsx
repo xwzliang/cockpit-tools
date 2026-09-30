@@ -11,6 +11,7 @@ import './settings/Settings.css';
 import { Save, FolderOpen, AlertCircle, RefreshCw } from 'lucide-react';
 import type { SettingsPageViewProps } from "./SettingsPageView";
 import { SettingsCodexPlatformPanel } from "./SettingsCodexPlatformPanel";
+import { AntigravitySshSyncSettingsControl } from '../components/AntigravitySshSyncSettingsControl';
 
 
 /** 渲染 SettingsPageView 的 activeTab === 'general' 业务面板。 */
@@ -1260,6 +1261,8 @@ export function SettingsGeneralPanel(props: SettingsPageViewProps) {
                   </label>
                 </div>
               </div>
+
+              <AntigravitySshSyncSettingsControl variant="settings" />
 
 	              <div className="settings-row">
 	                <div className="row-label">

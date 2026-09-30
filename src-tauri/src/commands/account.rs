@@ -546,7 +546,27 @@ async fn switch_account_legacy_antigravity(
 
     modules::logger::log_info(&format!("Antigravity 账号切换完成: {}", account.email));
     modules::websocket::broadcast_account_switched(&account.id, &account.email);
+    sync_selected_server_after_antigravity_switch_logged(&account).await;
     Ok(account)
+}
+
+async fn sync_selected_server_after_antigravity_switch_logged(account: &models::Account) {
+    if let Some(ssh_sync) =
+        modules::ssh_server::sync_selected_server_after_antigravity_switch(account).await
+    {
+        if ssh_sync.verified {
+            modules::logger::log_info(&format!(
+                "[Antigravity SSH] 切号后同步成功: server_id={}, account={}, verified={}",
+                ssh_sync.server_id, ssh_sync.account_email, ssh_sync.verified
+            ));
+        } else {
+            modules::logger::log_warn(&format!(
+                "[Antigravity SSH] 切号后同步失败: server_id={}, error={}",
+                ssh_sync.server_id,
+                ssh_sync.error.unwrap_or_default()
+            ));
+        }
+    }
 }
 
 /// 切换账号（完整流程：Token刷新 + 关闭程序 + 注入 + 重启）
@@ -571,6 +591,7 @@ pub async fn switch_account(
             if let Ok(account) = &result {
                 modules::websocket::broadcast_account_switched(&account.id, &account.email);
                 modules::websocket::broadcast_data_changed("switch_account_local_no_launch");
+                sync_selected_server_after_antigravity_switch_logged(account).await;
             }
             return result;
         }
@@ -583,6 +604,9 @@ pub async fn switch_account(
                 None,
             )
             .await;
+            if let Ok(account) = &result {
+                sync_selected_server_after_antigravity_switch_logged(account).await;
+            }
             if let Err(error) = &result {
                 if error.starts_with("APP_PATH_NOT_FOUND:") {
                     let _ = app.emit(
@@ -700,6 +724,8 @@ pub async fn switch_account(
 
     // 广播切换完成通知
     modules::websocket::broadcast_account_switched(&account.id, &account.email);
+
+    sync_selected_server_after_antigravity_switch_logged(&account).await;
 
     Ok(account)
 }

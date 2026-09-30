@@ -1224,6 +1224,7 @@ pub fn run() {
             commands::ssh_server::select_ssh_server,
             commands::ssh_server::test_ssh_server_connection,
             commands::ssh_server::sync_current_codex_account_to_ssh_server,
+            commands::ssh_server::sync_current_antigravity_account_to_ssh_server,
             // CodeBuddy CN Commands
             commands::codebuddy_cn::list_codebuddy_cn_accounts,
             commands::codebuddy_cn::delete_codebuddy_cn_account,
