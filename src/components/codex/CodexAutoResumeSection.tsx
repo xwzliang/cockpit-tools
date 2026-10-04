@@ -57,7 +57,7 @@ export function CodexAutoResumeSection({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nowSec, setNowSec] = useState<number>(Math.floor(Date.now() / 1000));
-
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   // Ticking timer for live countdown
   useEffect(() => {
@@ -67,9 +67,11 @@ export function CodexAutoResumeSection({
     return () => clearInterval(timer);
   }, []);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const loadData = useCallback(async (isSilent = false) => {
+    if (!isSilent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       const [interrupted, resumed] = await Promise.all([
         detectInterruptedCodexTasks().catch((err) => {
@@ -83,15 +85,20 @@ export function CodexAutoResumeSection({
       ]);
       setInterruptedTasks(interrupted);
       setResumedTasks(resumed);
+      setLastUpdated(new Date());
 
-      // Auto expand if there are interrupted tasks
-      if (interrupted.length > 0) {
+      // Auto expand on initial/manual load if there are interrupted tasks
+      if (!isSilent && interrupted.length > 0) {
         setIsCollapsed(false);
       }
     } catch (err) {
-      setError(String(err));
+      if (!isSilent) {
+        setError(String(err));
+      }
     } finally {
-      setLoading(false);
+      if (!isSilent) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -174,11 +181,32 @@ export function CodexAutoResumeSection({
     void loadData();
   }, [loadData]);
 
+  // Periodic auto-update every 1 minute so interrupted and resumed tasks are continuously tracked
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!resumingTaskId) {
+        void loadData(true);
+      }
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [loadData, resumingTaskId]);
+
+  // Refresh when window regains focus
+  useEffect(() => {
+    const handleFocus = () => {
+      if (!resumingTaskId) {
+        void loadData(true);
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [loadData, resumingTaskId]);
+
   // Listen to background auto-resume events
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen('codex://task-auto-resumed', () => {
-      void loadData();
+      void loadData(true);
     }).then((fn) => {
       unlisten = fn;
     });
@@ -364,9 +392,9 @@ export function CodexAutoResumeSection({
           <button
             type="button"
             className="codex-auto-resume-btn-icon"
-            onClick={loadData}
+            onClick={() => void loadData(false)}
             disabled={loading}
-            title={t('common.refresh', '刷新扫描')}
+            title={`${t('common.refresh', '刷新扫描')} (${t('codex.autoResume.autoUpdateInterval', '每 1 分钟自动更新')} · ${t('codex.autoResume.lastUpdated', '上次更新: {{time}}', { time: lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) })})`}
           >
             <RefreshCw size={14} className={loading ? 'spin' : undefined} />
           </button>
@@ -516,7 +544,11 @@ export function CodexAutoResumeSection({
                           </span>
                         )}
 
-                        {task.can_resume ? (
+                        {task.status === 'blocked' ? (
+                          <span className="codex-task-tag codex-task-tag--status-blocked">
+                            ⏸️ {t('codex.autoResume.statusBlocked', '已暂停/阻塞')}
+                          </span>
+                        ) : task.can_resume ? (
                           <span className="codex-task-tag codex-task-tag--status-ready">
                             <CheckCircle size={12} />
                             {t('codex.autoResume.canResumeNow', '可恢复')}
@@ -574,44 +606,54 @@ export function CodexAutoResumeSection({
                       )}
                     </div>
 
-                    {countdown && (
-                      <div className="codex-task-card__reset-box">
-                        <div className="codex-task-card__reset-info">
+                    <div className="codex-task-card__reset-box">
+                      <div className="codex-task-card__reset-info">
+                        {countdown ? (
                           <div className="codex-task-card__reset-countdown">
                             <Clock size={14} />
                             {countdown}
                           </div>
-                          {resetTimeStr && (
-                            <div className="codex-task-card__reset-time">
-                              {t('codex.autoResume.resetTimeLabel', '预计重置时间: {{time}}', {
-                                time: resetTimeStr,
-                              })}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="codex-task-card__actions">
-                          <button
-                            type="button"
-                            className="btn-resume"
-                            onClick={() => handleResumeTask(task)}
-                            disabled={isResuming}
-                          >
-                            {isResuming ? (
-                              <>
-                                <RefreshCw size={13} className="spin" />
-                                {t('codex.autoResume.resuming', '正在恢复...')}
-                              </>
-                            ) : (
-                              <>
-                                <Play size={13} />
-                                {t('codex.autoResume.resumeNow', '立即恢复')}
-                              </>
-                            )}
-                          </button>
-                        </div>
+                        ) : task.can_resume ? (
+                          <div className="codex-task-card__reset-countdown can-resume-text">
+                            <CheckCircle size={14} />
+                            {t('codex.autoResume.quotaRestored', '可立即恢复执行')}
+                          </div>
+                        ) : (
+                          <div className="codex-task-card__reset-countdown">
+                            <Clock size={14} />
+                            {t('codex.autoResume.waitingQuota', '等待配额重置')}
+                          </div>
+                        )}
+                        {resetTimeStr && (
+                          <div className="codex-task-card__reset-time">
+                            {t('codex.autoResume.resetTimeLabel', '预计重置时间: {{time}}', {
+                              time: resetTimeStr,
+                            })}
+                          </div>
+                        )}
                       </div>
-                    )}
+
+                      <div className="codex-task-card__actions">
+                        <button
+                          type="button"
+                          className="btn-resume"
+                          onClick={() => handleResumeTask(task)}
+                          disabled={isResuming}
+                        >
+                          {isResuming ? (
+                            <>
+                              <RefreshCw size={13} className="spin" />
+                              {t('codex.autoResume.resuming', '正在恢复...')}
+                            </>
+                          ) : (
+                            <>
+                              <Play size={13} />
+                              {t('codex.autoResume.resumeNow', '立即恢复')}
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 );
               })

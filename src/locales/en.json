@@ -4799,7 +4799,9 @@
       "taskCheckboxLabel": "Auto-resume",
       "taskExcludedBadge": "Auto-resume excluded",
       "excludedNotice": "Auto-resume paused, click the resume button to run manually",
-      "autoResetExpiringExecutedToast": "Account {{email}}'s reset credit is expiring in less than 10 minutes and has been automatically applied to avoid expiration."
+      "autoResetExpiringExecutedToast": "Account {{email}}'s reset credit is expiring in less than 10 minutes and has been automatically applied to avoid expiration.",
+      "autoUpdateInterval": "Auto-updates every 1 min",
+      "lastUpdated": "Last updated: {{time}}"
     },
     "exportAuthFailed": "Export failed",
     "exportAuthFailedTitle": "Export all auth-failed accounts",

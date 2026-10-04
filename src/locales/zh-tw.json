@@ -4557,7 +4557,9 @@
       "remainingHoursMinutesSeconds": "距離配額重置還剩 {{hours}} 小时 {{minutes}} 分鐘 {{seconds}} 秒",
       "remainingMinutesSeconds": "距離配額重置還剩 {{minutes}} 分鐘 {{seconds}} 秒",
       "statusEnabled": "自動恢復已開啟",
-      "statusDisabled": "自動恢復未開啟"
+      "statusDisabled": "自動恢復未開啟",
+      "autoUpdateInterval": "每 1 分鐘自動更新",
+      "lastUpdated": "上次更新: {{time}}"
     },
     "exportAuthFailed": "匯出失敗帳號",
     "exportAuthFailedTitle": "匯出全部授權失敗帳號",

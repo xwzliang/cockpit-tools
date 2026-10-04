@@ -437,6 +437,12 @@
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
+.codex-task-tag--status-blocked {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
 .codex-task-tag--trigger-auto {
   background: rgba(16, 185, 129, 0.15);
   color: #34d399;
@@ -501,6 +507,10 @@
   font-size: 12px;
   font-weight: 600;
   color: #fbbf24;
+}
+
+.codex-task-card__reset-countdown.can-resume-text {
+  color: #34d399;
 }
 
 .codex-task-card__reset-time {

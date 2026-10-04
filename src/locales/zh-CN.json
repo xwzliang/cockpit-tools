@@ -4799,7 +4799,9 @@
       "taskCheckboxLabel": "自动恢复",
       "taskExcludedBadge": "已排除自动恢复",
       "excludedNotice": "已暂停自动恢复，可点击右侧按钮手动恢复",
-      "autoResetExpiringExecutedToast": "账号 {{email}} 的重置额度即将到期（不足 10 分钟），已自动使用以防过期浪费。"
+      "autoResetExpiringExecutedToast": "账号 {{email}} 的重置额度即将到期（不足 10 分钟），已自动使用以防过期浪费。",
+      "autoUpdateInterval": "每 1 分钟自动更新",
+      "lastUpdated": "上次更新: {{time}}"
     },
     "exportAuthFailed": "导出失败账号",
     "exportAuthFailedTitle": "导出全部授权失败账号",
