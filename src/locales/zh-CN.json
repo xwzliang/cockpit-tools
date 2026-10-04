@@ -2327,7 +2327,11 @@
       "excludedBadge": "已排除自动恢复",
       "excludedBadgeDesc": "此任务已勾选排除，即使配额恢复也不会自动恢复",
       "autoUpdateInterval": "每 1 分钟自动更新",
-      "lastUpdated": "上次更新: {{time}}"
+      "lastUpdated": "上次更新: {{time}}",
+      "deleteTaskTooltip": "从任务列表中删除此中断任务，不再监控",
+      "deleteConfirmTitle": "删除中断任务",
+      "deleteConfirmMessage": "确定要从受限中断列表中删除该任务吗？删除后将不再跟踪和提示此任务。",
+      "deleteSuccess": "任务已从列表中移除"
     }
   },
   "codex": {
@@ -4850,7 +4854,11 @@
       "excludedNotice": "已暂停自动恢复，可点击右侧按钮手动恢复",
       "autoResetExpiringExecutedToast": "账号 {{email}} 的重置额度即将到期（不足 10 分钟），已自动使用以防过期浪费。",
       "autoUpdateInterval": "每 1 分钟自动更新",
-      "lastUpdated": "上次更新: {{time}}"
+      "lastUpdated": "上次更新: {{time}}",
+      "deleteTaskTooltip": "从任务列表中删除此中断任务，不再监控",
+      "deleteConfirmTitle": "删除中断任务",
+      "deleteConfirmMessage": "确定要从受限中断列表中删除该任务吗？删除后将不再跟踪和提示此任务。",
+      "deleteSuccess": "任务已从列表中移除"
     },
     "exportAuthFailed": "导出失败账号",
     "exportAuthFailedTitle": "导出全部授权失败账号",

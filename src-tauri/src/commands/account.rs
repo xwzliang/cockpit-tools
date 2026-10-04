@@ -547,6 +547,11 @@ async fn switch_account_legacy_antigravity(
     modules::logger::log_info(&format!("Antigravity 账号切换完成: {}", account.email));
     modules::websocket::broadcast_account_switched(&account.id, &account.email);
     sync_selected_server_after_antigravity_switch_logged(&account).await;
+    let resume_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        crate::modules::antigravity_auto_resume::resume_checked_tasks_on_account_switch(&resume_app).await;
+    });
     Ok(account)
 }
 
@@ -592,6 +597,11 @@ pub async fn switch_account(
                 modules::websocket::broadcast_account_switched(&account.id, &account.email);
                 modules::websocket::broadcast_data_changed("switch_account_local_no_launch");
                 sync_selected_server_after_antigravity_switch_logged(account).await;
+                let resume_app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    crate::modules::antigravity_auto_resume::resume_checked_tasks_on_account_switch(&resume_app).await;
+                });
             }
             return result;
         }
@@ -606,6 +616,11 @@ pub async fn switch_account(
             .await;
             if let Ok(account) = &result {
                 sync_selected_server_after_antigravity_switch_logged(account).await;
+                let resume_app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    crate::modules::antigravity_auto_resume::resume_checked_tasks_on_account_switch(&resume_app).await;
+                });
             }
             if let Err(error) = &result {
                 if error.starts_with("APP_PATH_NOT_FOUND:") {
@@ -726,6 +741,12 @@ pub async fn switch_account(
     modules::websocket::broadcast_account_switched(&account.id, &account.email);
 
     sync_selected_server_after_antigravity_switch_logged(&account).await;
+
+    let resume_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        crate::modules::antigravity_auto_resume::resume_checked_tasks_on_account_switch(&resume_app).await;
+    });
 
     Ok(account)
 }

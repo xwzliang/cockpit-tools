@@ -38,3 +38,9 @@ pub fn codex_set_auto_resume_task_excluded(
     crate::modules::codex_auto_resume::set_task_excluded(&task_id, excluded)
 }
 
+#[tauri::command]
+pub fn codex_delete_interrupted_task(task_id: String) -> Result<(), String> {
+    crate::modules::codex_auto_resume::delete_interrupted_task(&task_id)
+}
+
+

@@ -25,6 +25,7 @@ import {
   clearAntigravityAutoResumedTasks,
   resumeInterruptedAntigravityTask,
   setAntigravityTaskExcluded,
+  deleteInterruptedAntigravityTask,
   type InterruptedAntigravityTask,
   type ResumedTaskRecord,
 } from '../../services/antigravityAutoResumeService';
@@ -222,6 +223,29 @@ export function AntigravityAutoResumeSection({
       setError(`恢复任务失败: ${err}`);
     } finally {
       setResumingTaskId(null);
+    }
+  };
+
+  const handleDeleteTask = async (task: InterruptedAntigravityTask) => {
+    const confirmed = await confirmDialog(
+      t(
+        'antigravity.autoResume.deleteConfirmMessage',
+        '确定要从受限中断列表中删除该任务吗？删除后将不再跟踪和提示此任务。',
+      ),
+      {
+        title: t('antigravity.autoResume.deleteConfirmTitle', '删除中断任务'),
+        kind: 'warning',
+      },
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteInterruptedAntigravityTask(task.id);
+      setInterruptedTasks((prev) => prev.filter((t) => t.id !== task.id));
+      setActionMessage(t('antigravity.autoResume.deleteSuccess', '任务已从列表中移除'));
+      setTimeout(() => setActionMessage(null), 3000);
+    } catch (err) {
+      setError(`删除任务失败: ${err}`);
     }
   };
 
@@ -594,6 +618,16 @@ export function AntigravityAutoResumeSection({
                       </div>
 
                       <div className="antigravity-task-card__actions">
+                        <button
+                          type="button"
+                          className="btn-delete"
+                          onClick={() => void handleDeleteTask(task)}
+                          disabled={isResuming}
+                          title={t('antigravity.autoResume.deleteTaskTooltip', '从任务列表中删除此中断任务，不再监控')}
+                        >
+                          <Trash2 size={13} />
+                          <span>{t('common.delete', '删除')}</span>
+                        </button>
                         <button
                           type="button"
                           className="btn-resume"

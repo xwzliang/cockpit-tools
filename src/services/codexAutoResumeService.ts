@@ -73,3 +73,8 @@ export async function setCodexTaskExcluded(taskId: string, excluded: boolean): P
   return await invoke<void>('codex_set_auto_resume_task_excluded', { taskId, excluded });
 }
 
+export async function deleteInterruptedCodexTask(taskId: string): Promise<void> {
+  return await invoke<void>('codex_delete_interrupted_task', { taskId });
+}
+
+

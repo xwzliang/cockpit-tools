@@ -72,3 +72,8 @@ export async function getAntigravityExcludedTasks(): Promise<string[]> {
 export async function setAntigravityTaskExcluded(taskId: string, excluded: boolean): Promise<void> {
   return await invoke<void>('antigravity_set_auto_resume_task_excluded', { taskId, excluded });
 }
+
+export async function deleteInterruptedAntigravityTask(taskId: string): Promise<void> {
+  return await invoke<void>('antigravity_delete_interrupted_task', { taskId });
+}
+

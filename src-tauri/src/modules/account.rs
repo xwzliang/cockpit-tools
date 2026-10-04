@@ -1887,6 +1887,13 @@ async fn run_auto_switch_if_needed_inner() -> Result<Option<Account>, String> {
         switched
     };
     modules::websocket::broadcast_data_changed("auto_switch");
+    if let Some(app) = crate::get_app_handle() {
+        let resume_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            crate::modules::antigravity_auto_resume::resume_checked_tasks_on_account_switch(&resume_app).await;
+        });
+    }
     Ok(Some(switched))
 }
 

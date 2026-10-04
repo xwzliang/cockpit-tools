@@ -26,6 +26,7 @@ import {
   clearAutoResumedTasks,
   resumeInterruptedCodexTask,
   setCodexTaskExcluded,
+  deleteInterruptedCodexTask,
   type InterruptedCodexTask,
   type ResumedTaskRecord,
 } from '../../services/codexAutoResumeService';
@@ -239,6 +240,29 @@ export function CodexAutoResumeSection({
       setError(`恢复任务失败: ${err}`);
     } finally {
       setResumingTaskId(null);
+    }
+  };
+
+  const handleDeleteTask = async (task: InterruptedCodexTask) => {
+    const confirmed = await confirmDialog(
+      t(
+        'codex.autoResume.deleteConfirmMessage',
+        '确定要从受限中断列表中删除该任务吗？删除后将不再跟踪和提示此任务。',
+      ),
+      {
+        title: t('codex.autoResume.deleteConfirmTitle', '删除中断任务'),
+        kind: 'warning',
+      },
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteInterruptedCodexTask(task.id);
+      setInterruptedTasks((prev) => prev.filter((t) => t.id !== task.id));
+      setActionMessage(t('codex.autoResume.deleteSuccess', '任务已从列表中移除'));
+      setTimeout(() => setActionMessage(null), 3000);
+    } catch (err) {
+      setError(`删除任务失败: ${err}`);
     }
   };
 
@@ -630,6 +654,16 @@ export function CodexAutoResumeSection({
                       </div>
 
                       <div className="codex-task-card__actions">
+                        <button
+                          type="button"
+                          className="btn-delete"
+                          onClick={() => void handleDeleteTask(task)}
+                          disabled={isResuming}
+                          title={t('codex.autoResume.deleteTaskTooltip', '从任务列表中删除此中断任务，不再监控')}
+                        >
+                          <Trash2 size={13} />
+                          {t('common.delete', '删除')}
+                        </button>
                         <button
                           type="button"
                           className="btn-resume"

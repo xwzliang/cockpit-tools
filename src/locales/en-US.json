@@ -2327,7 +2327,11 @@
       "excludedBadge": "Excluded from Auto-Resume",
       "excludedBadgeDesc": "This task is excluded and will not auto-resume even if quota recovers",
       "autoUpdateInterval": "Auto updates every 1 minute",
-      "lastUpdated": "Last updated: {{time}}"
+      "lastUpdated": "Last updated: {{time}}",
+      "deleteTaskTooltip": "Remove this task from interrupted list and stop tracking",
+      "deleteConfirmTitle": "Delete Interrupted Task",
+      "deleteConfirmMessage": "Are you sure you want to remove this task from the interrupted list? It will no longer be tracked or shown.",
+      "deleteSuccess": "Task removed from list"
     }
   },
   "codex": {
@@ -4850,7 +4854,11 @@
       "excludedNotice": "Auto-resume paused, click the resume button to run manually",
       "autoResetExpiringExecutedToast": "Account {{email}}'s reset credit is expiring in less than 10 minutes and has been automatically applied to avoid expiration.",
       "autoUpdateInterval": "Auto-updates every 1 min",
-      "lastUpdated": "Last updated: {{time}}"
+      "lastUpdated": "Last updated: {{time}}",
+      "deleteTaskTooltip": "Remove this task from interrupted list and stop tracking",
+      "deleteConfirmTitle": "Delete Interrupted Task",
+      "deleteConfirmMessage": "Are you sure you want to remove this task from the interrupted list? It will no longer be tracked or shown.",
+      "deleteSuccess": "Task removed from list"
     },
     "exportAuthFailed": "Export failed",
     "exportAuthFailedTitle": "Export all auth-failed accounts",

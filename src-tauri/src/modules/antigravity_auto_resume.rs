@@ -117,6 +117,45 @@ pub fn set_task_excluded(task_id: &str, excluded: bool) -> Result<(), String> {
     save_excluded_task_ids(&ids)
 }
 
+const DISMISSED_TASKS_FILE: &str = "antigravity_auto_resume_dismissed_tasks.json";
+
+fn dismissed_tasks_file_path() -> Result<PathBuf, String> {
+    Ok(crate::modules::account::get_data_dir()?.join(DISMISSED_TASKS_FILE))
+}
+
+pub fn load_dismissed_task_ids() -> HashSet<String> {
+    let path = match dismissed_tasks_file_path() {
+        Ok(p) => p,
+        Err(_) => return HashSet::new(),
+    };
+    if !path.exists() {
+        return HashSet::new();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+pub fn save_dismissed_task_ids(ids: &HashSet<String>) -> Result<(), String> {
+    let path = dismissed_tasks_file_path()?;
+    let content = serde_json::to_string_pretty(ids)
+        .map_err(|e| format!("序列化已忽略任务失败: {}", e))?;
+    crate::modules::atomic_write::write_string_atomic(&path, &content)
+}
+
+pub fn delete_interrupted_task(task_id: &str) -> Result<(), String> {
+    let mut ids = load_dismissed_task_ids();
+    ids.insert(task_id.to_string());
+    if let Some(pos) = task_id.rfind(':') {
+        let raw_id = &task_id[pos + 1..];
+        if !raw_id.is_empty() {
+            ids.insert(raw_id.to_string());
+        }
+    }
+    save_dismissed_task_ids(&ids)
+}
+
 pub fn load_resumed_task_records() -> Vec<ResumedTaskRecord> {
     let path = match resumed_tasks_file_path() {
         Ok(p) => p,
@@ -575,6 +614,10 @@ pub async fn detect_all_interrupted_tasks() -> Vec<InterruptedAntigravityTask> {
 
     let (earliest_resets_at, current_can_resume) = get_current_antigravity_quota_resets_at();
     let excluded_ids = load_excluded_task_ids();
+    let dismissed_ids = load_dismissed_task_ids();
+
+    all_tasks.retain(|t| !dismissed_ids.contains(&t.id) && !dismissed_ids.contains(&t.thread_id));
+
     for task in &mut all_tasks {
         task.resets_at = earliest_resets_at;
         task.can_resume = current_can_resume;
@@ -885,6 +928,87 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
     }
 }
 
+pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
+    let cfg = config::get_user_config();
+    if !cfg.antigravity_auto_resume_interrupted_tasks_enabled {
+        logger::log_info("[AntigravityAutoResume] 切号后检查：自动恢复功能未开启，跳过");
+        return;
+    }
+
+    let (_resets_at, can_resume) = get_current_antigravity_quota_resets_at();
+    if !can_resume {
+        logger::log_info("[AntigravityAutoResume] 切号后检查：当前账号配额仍处于受限状态，跳过立即恢复");
+        return;
+    }
+
+    logger::log_info("[AntigravityAutoResume] 切号后检测到配额可用，开始检查并立即恢复勾选的中断任务...");
+    let tasks = detect_all_interrupted_tasks().await;
+    let now_ts = Utc::now().timestamp();
+
+    for task in tasks {
+        if task.is_excluded {
+            continue;
+        }
+
+        {
+            let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
+            cache.insert(task.id.clone(), now_ts);
+        }
+
+        logger::log_info(&format!(
+            "[AntigravityAutoResume] 切号后立即恢复任务: id={}, title={}",
+            task.id, task.title
+        ));
+
+        let res = resume_task(&task, None, "auto").await;
+        match res {
+            Ok(result) => {
+                logger::log_info(&format!(
+                    "[AntigravityAutoResume] 切号后自动恢复成功: {} - {}",
+                    task.id, result.message
+                ));
+
+                let title = "Antigravity 任务已在切号后自动恢复";
+                let display_title = if task.title.len() > 50 {
+                    format!("{}...", &task.title[..47])
+                } else {
+                    task.title.clone()
+                };
+                let body = format!("账号切换后已立即恢复执行：{}", display_title);
+
+                #[cfg(target_os = "macos")]
+                {
+                    let bundle_identifier = app.config().identifier.clone();
+                    let mut notification = mac_notification_sys::Notification::new();
+                    notification.title(title).message(&body);
+                    let _ = mac_notification_sys::set_application(&bundle_identifier);
+                    let _ = notification.send();
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(&body)
+                        .show();
+                }
+
+                let _ = app.emit("antigravity://task-auto-resumed", &task);
+            }
+            Err(err) => {
+                logger::log_warn(&format!(
+                    "[AntigravityAutoResume] 切号后自动恢复任务失败: {} - {}",
+                    task.id, err
+                ));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -898,6 +1022,13 @@ mod tests {
         assert!(load_excluded_task_ids().contains(test_task_id));
         set_task_excluded(test_task_id, false).unwrap();
         assert!(!load_excluded_task_ids().contains(test_task_id));
+    }
+
+    #[test]
+    fn test_task_delete_dismiss_logic() {
+        let test_task_id = "test:antigravity:delete:999";
+        let _ = delete_interrupted_task(test_task_id);
+        assert!(load_dismissed_task_ids().contains(test_task_id));
     }
 
     #[tokio::test]

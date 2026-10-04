@@ -37,3 +37,9 @@ pub fn antigravity_set_auto_resume_task_excluded(
 ) -> Result<(), String> {
     crate::modules::antigravity_auto_resume::set_task_excluded(&task_id, excluded)
 }
+
+#[tauri::command]
+pub fn antigravity_delete_interrupted_task(task_id: String) -> Result<(), String> {
+    crate::modules::antigravity_auto_resume::delete_interrupted_task(&task_id)
+}
+

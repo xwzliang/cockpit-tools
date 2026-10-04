@@ -1456,6 +1456,13 @@ pub async fn switch_codex_account(
     );
     progress_guard.completed = true;
     clear_codex_switch_cancel(&account_id);
+
+    let resume_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        crate::modules::codex_auto_resume::resume_checked_tasks_on_account_switch(&resume_app).await;
+    });
+
     Ok(account)
 }
 
