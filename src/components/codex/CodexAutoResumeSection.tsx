@@ -514,7 +514,7 @@ export function CodexAutoResumeSection({
               </div>
             ) : (
               interruptedTasks.map((task) => {
-                const countdown = formatCountdown(task.resets_at);
+                const countdown = !task.can_resume ? formatCountdown(task.resets_at) : null;
                 const resetTimeStr = formatResetTime(task.resets_at);
                 const isResuming = resumingTaskId === task.id;
 
@@ -544,11 +544,7 @@ export function CodexAutoResumeSection({
                           </span>
                         )}
 
-                        {task.status === 'blocked' ? (
-                          <span className="codex-task-tag codex-task-tag--status-blocked">
-                            ⏸️ {t('codex.autoResume.statusBlocked', '已暂停/阻塞')}
-                          </span>
-                        ) : task.can_resume ? (
+                        {task.can_resume ? (
                           <span className="codex-task-tag codex-task-tag--status-ready">
                             <CheckCircle size={12} />
                             {t('codex.autoResume.canResumeNow', '可恢复')}
@@ -624,7 +620,7 @@ export function CodexAutoResumeSection({
                             {t('codex.autoResume.waitingQuota', '等待配额重置')}
                           </div>
                         )}
-                        {resetTimeStr && (
+                        {!task.can_resume && resetTimeStr && (
                           <div className="codex-task-card__reset-time">
                             {t('codex.autoResume.resetTimeLabel', '预计重置时间: {{time}}', {
                               time: resetTimeStr,
@@ -638,7 +634,12 @@ export function CodexAutoResumeSection({
                           type="button"
                           className="btn-resume"
                           onClick={() => handleResumeTask(task)}
-                          disabled={isResuming}
+                          disabled={isResuming || !task.can_resume}
+                          title={
+                            !task.can_resume
+                              ? t('codex.autoResume.cannotResumeYet', '配额尚未重置，暂无法恢复')
+                              : undefined
+                          }
                         >
                           {isResuming ? (
                             <>

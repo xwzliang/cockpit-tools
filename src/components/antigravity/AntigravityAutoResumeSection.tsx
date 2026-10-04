@@ -479,7 +479,7 @@ export function AntigravityAutoResumeSection({
               </div>
             ) : (
               interruptedTasks.map((task) => {
-                const countdown = formatCountdown(task.resets_at);
+                const countdown = !task.can_resume ? formatCountdown(task.resets_at) : null;
                 const resetTimeStr = formatResetTime(task.resets_at);
                 const isResuming = resumingTaskId === task.id;
 
@@ -503,17 +503,15 @@ export function AntigravityAutoResumeSection({
                           📝 {t('antigravity.autoResume.taskType', '会话任务')}
                         </span>
 
-                        {task.status === 'blocked' ? (
-                          <span className="antigravity-task-tag antigravity-task-tag--status-blocked">
-                            ⏸️ {t('antigravity.autoResume.statusBlocked', '已暂停/中断')}
-                          </span>
-                        ) : task.can_resume ? (
+                        {task.can_resume ? (
                           <span className="antigravity-task-tag antigravity-task-tag--status-ready">
-                            ✨ {t('antigravity.autoResume.statusReady', '可恢复')}
+                            <CheckCircle size={11} />
+                            {t('antigravity.autoResume.statusReady', '可恢复')}
                           </span>
                         ) : (
                           <span className="antigravity-task-tag antigravity-task-tag--status-waiting">
-                            ⏳ {t('antigravity.autoResume.statusWaiting', '等待配额重置')}
+                            <Clock size={11} />
+                            {t('antigravity.autoResume.statusWaiting', '等待配额重置')}
                           </span>
                         )}
 
@@ -570,29 +568,27 @@ export function AntigravityAutoResumeSection({
 
                     <div className="antigravity-task-card__reset-box">
                       <div className="antigravity-task-card__reset-info">
-                        {task.status === 'blocked' ? (
-                          <div className="antigravity-task-card__reset-countdown can-resume-text">
-                            ✨ {t('antigravity.autoResume.canResumeNow', '任务未受额度硬性拦截，可立即尝试恢复')}
+                        {countdown ? (
+                          <div className="antigravity-task-card__reset-countdown">
+                            <Clock size={13} />
+                            <span>{countdown}</span>
                           </div>
-                        ) : task.resets_at ? (
-                          <>
-                            <div
-                              className={`antigravity-task-card__reset-countdown ${
-                                task.can_resume ? 'can-resume-text' : ''
-                              }`}
-                            >
-                              <Clock size={13} />
-                              <span>{countdown}</span>
-                            </div>
-                            <div className="antigravity-task-card__reset-time">
-                              {t('antigravity.autoResume.expectedResetTime', '预计重置时间: {{time}}', {
-                                time: resetTimeStr,
-                              })}
-                            </div>
-                          </>
-                        ) : (
+                        ) : task.can_resume ? (
                           <div className="antigravity-task-card__reset-countdown can-resume-text">
-                            ✨ {t('antigravity.autoResume.canResumeNow', '任务未受额度硬性拦截，可立即尝试恢复')}
+                            <CheckCircle size={13} />
+                            <span>{t('antigravity.autoResume.quotaRestored', '配额已恢复，可立即继续执行')}</span>
+                          </div>
+                        ) : (
+                          <div className="antigravity-task-card__reset-countdown">
+                            <Clock size={13} />
+                            <span>{t('antigravity.autoResume.statusWaiting', '等待配额重置')}</span>
+                          </div>
+                        )}
+                        {!task.can_resume && resetTimeStr && (
+                          <div className="antigravity-task-card__reset-time">
+                            {t('antigravity.autoResume.expectedResetTime', '预计重置时间: {{time}}', {
+                              time: resetTimeStr,
+                            })}
                           </div>
                         )}
                       </div>
@@ -601,7 +597,12 @@ export function AntigravityAutoResumeSection({
                         <button
                           type="button"
                           className="btn-resume"
-                          disabled={isResuming}
+                          disabled={isResuming || !task.can_resume}
+                          title={
+                            !task.can_resume
+                              ? t('antigravity.autoResume.cannotResumeYet', '配额尚未重置，暂无法恢复')
+                              : undefined
+                          }
                           onClick={() => void handleResumeTask(task)}
                         >
                           {isResuming ? (

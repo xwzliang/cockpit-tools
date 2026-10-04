@@ -569,7 +569,7 @@ export function AccountsOverviewView(props: AccountsOverviewViewProps) {
         )}
 
         {/* 内容区域 */}
-        {loading ? (
+        {loading && accounts.length === 0 ? (
           <div className="empty-state">
             <div
               className="loading-spinner"

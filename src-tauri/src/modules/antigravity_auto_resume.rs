@@ -226,9 +226,8 @@ def check_task():
                     is_interrupted = True
                     error_message = 'Task was cancelled or interrupted during execution'
                 
-                if is_interrupted:
+                if is_interrupted and is_quota_limited:
                     seen_ids.add(cid)
-                    final_status = 'usage_limited' if is_quota_limited else 'blocked'
                     
                     cwd = None
                     if ws_uris:
@@ -250,12 +249,12 @@ def check_task():
                         'objective': preview,
                         'cwd': cwd,
                         'model': None,
-                        'status': final_status,
+                        'status': 'usage_limited',
                         'error_message': error_message,
                         'resets_at': None,
                         'reset_window_minutes': None,
                         'updated_at': parse_iso_time(last_mod_str),
-                        'can_resume': (not is_quota_limited)
+                        'can_resume': False
                     })
         except Exception:
             pass
@@ -446,20 +445,8 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
                 }
             }
 
-            if is_interrupted {
+            if is_interrupted && is_quota_limited {
                 seen_ids.insert(cid.clone());
-
-                let task_status = if is_quota_limited {
-                    "usage_limited".to_string()
-                } else {
-                    "blocked".to_string()
-                };
-
-                let can_resume = if is_quota_limited {
-                    current_can_resume
-                } else {
-                    true
-                };
 
                 let mut cwd = None;
                 if let Some(ref ws) = ws_uris {
@@ -497,12 +484,12 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
                     objective: preview_opt,
                     cwd,
                     model: None,
-                    status: task_status,
+                    status: "usage_limited".to_string(),
                     error_message: error_msg,
-                    resets_at: if is_quota_limited { earliest_resets_at } else { None },
+                    resets_at: earliest_resets_at,
                     reset_window_minutes: None,
                     updated_at,
-                    can_resume,
+                    can_resume: current_can_resume,
                     is_excluded,
                 });
             }
@@ -584,6 +571,14 @@ pub async fn detect_all_interrupted_tasks() -> Vec<InterruptedAntigravityTask> {
         if let Ok(res) = h.await {
             all_tasks.extend(res);
         }
+    }
+
+    let (earliest_resets_at, current_can_resume) = get_current_antigravity_quota_resets_at();
+    let excluded_ids = load_excluded_task_ids();
+    for task in &mut all_tasks {
+        task.resets_at = earliest_resets_at;
+        task.can_resume = current_can_resume;
+        task.is_excluded = excluded_ids.contains(&task.id) || excluded_ids.contains(&task.thread_id);
     }
 
     all_tasks
@@ -883,6 +878,8 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
                     "[AntigravityAutoResume] 自动恢复任务失败: {} - {}",
                     task.id, err
                 ));
+                let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
+                cache.insert(task.id.clone(), now_ts - 1800 + 60);
             }
         }
     }

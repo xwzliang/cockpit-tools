@@ -262,12 +262,8 @@ def detect_interrupted_tasks():
                 
                 resets_at, reset_window_minutes, error_msg, is_limited = parse_rollout_tail(rollout_path)
                 
-                if g_status == "usage_limited" or is_limited:
-                    can_resume = (resets_at is None) or (now_ts >= resets_at)
-                    task_status = "usage_limited"
-                else:
-                    can_resume = True
-                    task_status = "blocked"
+                if not (g_status == "usage_limited" or is_limited):
+                    continue
                 
                 tasks.append({
                     "id": f"ssh:{thread_id}",
@@ -279,12 +275,12 @@ def detect_interrupted_tasks():
                     "objective": objective,
                     "cwd": cwd,
                     "model": model,
-                    "status": task_status,
+                    "status": "usage_limited",
                     "error_message": error_msg,
                     "resets_at": resets_at,
                     "reset_window_minutes": reset_window_minutes,
                     "updated_at": int(updated_at_ms / 1000) if updated_at_ms else now_ts,
-                    "can_resume": can_resume
+                    "can_resume": False
                 })
             conn_g.close()
             conn_s.close()
@@ -580,6 +576,64 @@ fn is_thread_in_progress(hist_db: &Path, thread_id: &str) -> bool {
     false
 }
 
+/// 获取当前 Codex 账号的 5 小时配额重置时间戳（秒）及是否允许恢复
+pub fn get_current_codex_quota_resets_at() -> (Option<i64>, Option<i64>, bool) {
+    let now_ts = Utc::now().timestamp();
+    let account = match crate::modules::codex_account::get_current_account() {
+        Some(acc) => acc,
+        None => return (None, None, true),
+    };
+    let quota = match account.quota {
+        Some(q) => q,
+        None => return (None, None, true),
+    };
+
+    let hourly_exhausted = quota.hourly_percentage <= 0;
+    let hourly_reset = quota.hourly_reset_time;
+    let hourly_window = quota.hourly_window_minutes.or(Some(300));
+
+    let weekly_exhausted = quota.weekly_percentage <= 0;
+    let weekly_reset = quota.weekly_reset_time;
+
+    let mut is_blocked = false;
+    let mut target_reset_ts: Option<i64> = None;
+    let mut target_window = hourly_window;
+
+    if hourly_exhausted {
+        if let Some(h_ts) = hourly_reset {
+            if h_ts > now_ts {
+                is_blocked = true;
+                target_reset_ts = Some(h_ts);
+            }
+        } else {
+            is_blocked = true;
+        }
+    }
+
+    if weekly_exhausted {
+        if let Some(w_ts) = weekly_reset {
+            if w_ts > now_ts {
+                is_blocked = true;
+                target_reset_ts = match target_reset_ts {
+                    Some(cur) => Some(cur.max(w_ts)),
+                    None => {
+                        target_window = quota.weekly_window_minutes;
+                        Some(w_ts)
+                    }
+                };
+            }
+        } else {
+            is_blocked = true;
+        }
+    }
+
+    if is_blocked {
+        (target_reset_ts, target_window, false)
+    } else {
+        (hourly_reset, hourly_window, true)
+    }
+}
+
 pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
     let mut tasks = Vec::new();
     let home = match dirs::home_dir() {
@@ -592,6 +646,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
     let hist_db = codex_home.join("thread_history_1.sqlite");
     let now_ts = Utc::now().timestamp();
     let mut seen_threads = std::collections::HashSet::new();
+    let (current_resets_at, current_window, current_can_resume) = get_current_codex_quota_resets_at();
 
     // 1. Check thread_goals in goals_1.sqlite
     if goals_db.exists() && state_db.exists() {
@@ -656,18 +711,16 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                             }
                         }
 
-                        let (resets_at, reset_window_minutes, error_msg, is_limited) =
+                        let (_resets_at, _reset_window_minutes, error_msg, is_limited) =
                             if let Some(ref r_path) = rollout_path {
                                 parse_rollout_tail(Path::new(r_path))
                             } else {
                                 (None, None, None, false)
                             };
 
-                        let (can_resume, task_status) = if g_status == "usage_limited" || is_limited {
-                            (resets_at.map(|r| now_ts >= r).unwrap_or(true), "usage_limited".to_string())
-                        } else {
-                            (true, "blocked".to_string())
-                        };
+                        if g_status != "usage_limited" && !is_limited {
+                            continue;
+                        }
 
                         let updated_at = updated_at_ms.map(|ms| ms / 1000).unwrap_or(now_ts);
 
@@ -683,12 +736,12 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                             objective: Some(objective),
                             cwd,
                             model,
-                            status: task_status,
+                            status: "usage_limited".to_string(),
                             error_message: error_msg,
-                            resets_at,
-                            reset_window_minutes,
+                            resets_at: current_resets_at,
+                            reset_window_minutes: current_window,
                             updated_at,
-                            can_resume,
+                            can_resume: current_can_resume,
                             is_excluded: false,
                         });
                     }
@@ -726,7 +779,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                         if is_thread_in_progress(&hist_db, &t_id) {
                             continue;
                         }
-                        let (resets_at, reset_window_minutes, error_msg, is_limited) =
+                        let (_resets_at, _reset_window_minutes, error_msg, is_limited) =
                             if let Some(ref r_path) = rollout_path {
                                 parse_rollout_tail(Path::new(r_path))
                             } else {
@@ -734,7 +787,6 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                             };
 
                         if is_limited {
-                            let can_resume = resets_at.map(|r| now_ts >= r).unwrap_or(true);
                             let title = title_opt.unwrap_or_else(|| "未命名会话".to_string());
                             let updated_at = updated_at_opt.unwrap_or(now_ts);
 
@@ -752,10 +804,10 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                                 model,
                                 status: "usage_limited".to_string(),
                                 error_message: error_msg,
-                                resets_at,
-                                reset_window_minutes,
+                                resets_at: current_resets_at,
+                                reset_window_minutes: current_window,
                                 updated_at,
-                                can_resume,
+                                can_resume: current_can_resume,
                                 is_excluded: false,
                             });
                         }
@@ -793,11 +845,15 @@ pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedCo
     let mut raw_tasks: Vec<InterruptedCodexTask> = serde_json::from_str(json_text)
         .map_err(|e| format!("解析远端任务 JSON 失败: {}", e))?;
 
+    let (current_resets_at, current_window, current_can_resume) = get_current_codex_quota_resets_at();
     for task in &mut raw_tasks {
         task.source = "ssh".to_string();
         task.server_id = Some(server.id.clone());
         task.server_name = Some(server.name.clone());
         task.id = format!("ssh:{}:{}", server.id, task.thread_id);
+        task.resets_at = current_resets_at;
+        task.reset_window_minutes = current_window;
+        task.can_resume = current_can_resume;
     }
 
     Ok(raw_tasks)
@@ -830,8 +886,12 @@ pub async fn detect_all_interrupted_tasks() -> Vec<InterruptedCodexTask> {
         }
     }
 
+    let (current_resets_at, current_window, current_can_resume) = get_current_codex_quota_resets_at();
     let excluded = load_excluded_task_ids();
     for task in &mut all_tasks {
+        task.resets_at = current_resets_at;
+        task.reset_window_minutes = current_window;
+        task.can_resume = current_can_resume;
         task.is_excluded = excluded.contains(&task.id) || excluded.contains(&task.thread_id);
     }
 
@@ -1138,6 +1198,8 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
                     "[CodexAutoResume] 自动恢复任务失败: {} - {}",
                     task.id, err
                 ));
+                let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
+                cache.insert(task.id.clone(), now_ts - 1800 + 60);
             }
         }
     }

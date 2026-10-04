@@ -470,6 +470,34 @@
   gap: 8px;
 }
 
+.btn-resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #10b981;
+  background: #10b981;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-resume:hover:not(:disabled) {
+  background: #059669;
+  border-color: #059669;
+}
+
+.btn-resume:disabled {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.15);
+  color: var(--text-muted, #9ca3af);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Resumed history table/list */
 .antigravity-resumed-history-list {
   display: flex;
