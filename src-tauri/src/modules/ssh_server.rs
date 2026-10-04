@@ -335,7 +335,7 @@ fn build_ssh_args(server: &SshServer, connect_timeout_secs: u64) -> Vec<String> 
     args
 }
 
-async fn run_ssh(
+pub(crate) async fn run_ssh(
     server: &SshServer,
     timeout_secs: u64,
     remote_args: &[&str],

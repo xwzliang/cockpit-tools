@@ -457,6 +457,12 @@ pub struct UserConfig {
     /// Codex 自动切号指定账号（账号 ID）
     #[serde(default = "default_codex_auto_switch_selected_account_ids")]
     pub codex_auto_switch_selected_account_ids: Vec<String>,
+    /// 是否启用 Codex 受限中断任务自动恢复
+    #[serde(default = "default_codex_auto_resume_interrupted_tasks_enabled")]
+    pub codex_auto_resume_interrupted_tasks_enabled: bool,
+    /// 自动恢复是否包含 SSH 服务器
+    #[serde(default = "default_codex_auto_resume_sync_ssh")]
+    pub codex_auto_resume_sync_ssh: bool,
     /// 是否启用配额预警通知
     #[serde(default = "default_quota_alert_enabled")]
     pub quota_alert_enabled: bool,
@@ -1073,6 +1079,12 @@ fn default_codex_auto_switch_account_scope_mode() -> String {
 fn default_codex_auto_switch_selected_account_ids() -> Vec<String> {
     Vec::new()
 }
+fn default_codex_auto_resume_interrupted_tasks_enabled() -> bool {
+    false
+}
+fn default_codex_auto_resume_sync_ssh() -> bool {
+    true
+}
 fn default_quota_alert_enabled() -> bool {
     false
 }
@@ -1320,6 +1332,9 @@ impl Default for UserConfig {
             codex_auto_switch_account_scope_mode: default_codex_auto_switch_account_scope_mode(),
             codex_auto_switch_selected_account_ids: default_codex_auto_switch_selected_account_ids(
             ),
+            codex_auto_resume_interrupted_tasks_enabled:
+                default_codex_auto_resume_interrupted_tasks_enabled(),
+            codex_auto_resume_sync_ssh: default_codex_auto_resume_sync_ssh(),
             quota_alert_enabled: default_quota_alert_enabled(),
             quota_alert_threshold: default_quota_alert_threshold(),
             codex_quota_alert_enabled: default_codex_quota_alert_enabled(),
@@ -2030,6 +2045,18 @@ pub fn load_user_config() -> Result<UserConfig, String> {
             obj.insert(
                 "codex_auto_switch_enabled".to_string(),
                 json!(legacy_auto_switch_enabled),
+            );
+        }
+        if !obj.contains_key("codex_auto_resume_interrupted_tasks_enabled") {
+            obj.insert(
+                "codex_auto_resume_interrupted_tasks_enabled".to_string(),
+                json!(default_codex_auto_resume_interrupted_tasks_enabled()),
+            );
+        }
+        if !obj.contains_key("codex_auto_resume_sync_ssh") {
+            obj.insert(
+                "codex_auto_resume_sync_ssh".to_string(),
+                json!(default_codex_auto_resume_sync_ssh()),
             );
         }
         if !obj.contains_key("codex_auto_switch_primary_threshold") {

@@ -1,6 +1,7 @@
 import { AutoSwitchAccountScopeSelector } from '../components/AutoSwitchAccountScopeSelector';
 import { CodexContextManagementControl } from '../components/codex/CodexContextManagementControl';
 import { CodexSshSyncSettingsControl } from '../components/codex/CodexSshSyncSettingsControl';
+import { CodexAutoResumeControl } from '../components/codex/CodexAutoResumeControl';
 import './settings/Settings.css';
 import { RefreshCw } from 'lucide-react';
 import type { SettingsPageViewProps } from "./SettingsPageView";
@@ -19,6 +20,8 @@ export function SettingsCodexPlatformPanel(props: SettingsPageViewProps) {
     codexAutoSwitchAccountScopeMode,
     codexAutoSwitchEnabled,
     codexAutoSwitchSelectedAccountIds,
+    codexAutoResumeInterruptedTasksEnabled,
+    codexAutoResumeSyncSsh,
     codexGroups,
     codexHideRelayQuota,
     codexLaunchCandidates,
@@ -60,6 +63,8 @@ export function SettingsCodexPlatformPanel(props: SettingsPageViewProps) {
     setCodexAutoRefreshCustomMode,
     setCodexAutoSwitchAccountScopeMode,
     setCodexAutoSwitchSelectedAccountIds,
+    setCodexAutoResumeInterruptedTasksEnabled,
+    setCodexAutoResumeSyncSsh,
     setCodexHideRelayQuota,
     setCodexLaunchCandidates,
     setCodexLaunchOnSwitch,
@@ -259,6 +264,13 @@ export function SettingsCodexPlatformPanel(props: SettingsPageViewProps) {
               </div>
 
               <CodexSshSyncSettingsControl variant="settings" />
+
+              <CodexAutoResumeControl
+                enabled={codexAutoResumeInterruptedTasksEnabled}
+                onEnabledChange={setCodexAutoResumeInterruptedTasksEnabled}
+                syncSsh={codexAutoResumeSyncSsh}
+                onSyncSshChange={setCodexAutoResumeSyncSsh}
+              />
 
               <CodexContextManagementControl variant="settings" />
 

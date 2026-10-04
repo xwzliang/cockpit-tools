@@ -414,6 +414,9 @@ pub fn get_general_config(app: tauri::AppHandle) -> Result<GeneralConfig, String
         codex_auto_switch_secondary_threshold: user_config.codex_auto_switch_secondary_threshold,
         codex_auto_switch_account_scope_mode: user_config.codex_auto_switch_account_scope_mode,
         codex_auto_switch_selected_account_ids: user_config.codex_auto_switch_selected_account_ids,
+        codex_auto_resume_interrupted_tasks_enabled:
+            user_config.codex_auto_resume_interrupted_tasks_enabled,
+        codex_auto_resume_sync_ssh: user_config.codex_auto_resume_sync_ssh,
         quota_alert_enabled: user_config.quota_alert_enabled,
         quota_alert_threshold: user_config.quota_alert_threshold,
         codex_quota_alert_enabled: user_config.codex_quota_alert_enabled,

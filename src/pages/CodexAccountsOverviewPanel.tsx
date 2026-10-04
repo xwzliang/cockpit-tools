@@ -27,6 +27,7 @@ import type { CodexAccountsViewProps } from "./CodexAccountsView";
 import { CodexAddAccountDialog } from "./CodexAddAccountDialog";
 import { useCodexPelicanStore } from "../stores/useCodexPelicanStore";
 import { PELICAN_GROUPS_CHANGED } from "../components/codex/pelican/PelicanResults";
+import { CodexAutoResumeSection } from "../components/codex/CodexAutoResumeSection";
 
 
 /** 渲染 CodexAccountsView 的 activeTab === "overview" 业务面板。 */
@@ -1232,6 +1233,8 @@ export function CodexAccountsOverviewPanel(props: CodexAccountsViewProps) {
             onPreviousPage={pagination.goToPreviousPage}
             onNextPage={pagination.goToNextPage}
           />
+
+          <CodexAutoResumeSection variant="overview" />
 
           {<CodexAddAccountDialog {...props} />}
 

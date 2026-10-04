@@ -312,17 +312,17 @@ pub struct CodexWakeupProgressPayload {
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedBinary {
-    path: PathBuf,
-    source: String,
-    node_path: Option<PathBuf>,
-    version: String,
+pub(crate) struct ResolvedBinary {
+    pub(crate) path: PathBuf,
+    pub(crate) source: String,
+    pub(crate) node_path: Option<PathBuf>,
+    pub(crate) version: String,
 }
 
 #[derive(Debug, Clone)]
-struct CliResolveError {
-    message: String,
-    required_runtime_paths: Vec<String>,
+pub(crate) struct CliResolveError {
+    pub(crate) message: String,
+    pub(crate) required_runtime_paths: Vec<String>,
 }
 
 impl CliResolveError {
@@ -1670,7 +1670,7 @@ fn resolve_binary_with_runtime_config(
     ))
 }
 
-fn resolve_binary() -> Result<ResolvedBinary, CliResolveError> {
+pub(crate) fn resolve_binary() -> Result<ResolvedBinary, CliResolveError> {
     let runtime_config = load_runtime_config().map_err(|err| {
         CliResolveError::new(
             err,
@@ -1688,7 +1688,7 @@ fn fetch_binary_version(binary: &ResolvedBinary) -> Option<String> {
     }
 }
 
-fn build_binary_command(binary: &ResolvedBinary) -> Command {
+pub(crate) fn build_binary_command(binary: &ResolvedBinary) -> Command {
     let mut command = if let Some(node_path) = &binary.node_path {
         let mut command = Command::new(node_path);
         command.arg(&binary.path);

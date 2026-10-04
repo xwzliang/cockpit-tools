@@ -432,6 +432,7 @@ pub fn ensure_started(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             run_scheduler_once(&app).await;
+            crate::modules::codex_auto_resume::check_and_auto_resume(&app).await;
             sleep(Duration::from_secs(30)).await;
         }
     });
