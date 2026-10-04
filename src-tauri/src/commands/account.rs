@@ -907,3 +907,5 @@ mod tests {
         );
     }
 }
+
+include!("antigravity_auto_resume_commands.rs");

@@ -370,6 +370,7 @@ pub fn ensure_started(app: AppHandle) {
             if let Err(e) = check_and_handle_timeouts(&app).await {
                 modules::logger::log_warn(&format!("[WakeupTasks] 超时检查失败: {}", e));
             }
+            crate::modules::antigravity_auto_resume::check_and_auto_resume(&app).await;
             sleep(Duration::from_secs(30)).await;
         }
     });

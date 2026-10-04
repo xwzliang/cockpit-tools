@@ -463,6 +463,12 @@ pub struct UserConfig {
     /// 自动恢复是否包含 SSH 服务器
     #[serde(default = "default_codex_auto_resume_sync_ssh")]
     pub codex_auto_resume_sync_ssh: bool,
+    /// 是否启用 Antigravity 受限中断任务自动恢复
+    #[serde(default = "default_antigravity_auto_resume_interrupted_tasks_enabled")]
+    pub antigravity_auto_resume_interrupted_tasks_enabled: bool,
+    /// Antigravity 自动恢复是否包含 SSH 服务器
+    #[serde(default = "default_antigravity_auto_resume_sync_ssh")]
+    pub antigravity_auto_resume_sync_ssh: bool,
     /// 是否在重置额度到期前 10 分钟自动使用重置（避免过期浪费）
     #[serde(default = "default_codex_auto_apply_reset_before_expiration_enabled")]
     pub codex_auto_apply_reset_before_expiration_enabled: bool,
@@ -1088,6 +1094,12 @@ fn default_codex_auto_resume_interrupted_tasks_enabled() -> bool {
 fn default_codex_auto_resume_sync_ssh() -> bool {
     true
 }
+fn default_antigravity_auto_resume_interrupted_tasks_enabled() -> bool {
+    false
+}
+fn default_antigravity_auto_resume_sync_ssh() -> bool {
+    true
+}
 fn default_codex_auto_apply_reset_before_expiration_enabled() -> bool {
     true
 }
@@ -1341,6 +1353,9 @@ impl Default for UserConfig {
             codex_auto_resume_interrupted_tasks_enabled:
                 default_codex_auto_resume_interrupted_tasks_enabled(),
             codex_auto_resume_sync_ssh: default_codex_auto_resume_sync_ssh(),
+            antigravity_auto_resume_interrupted_tasks_enabled:
+                default_antigravity_auto_resume_interrupted_tasks_enabled(),
+            antigravity_auto_resume_sync_ssh: default_antigravity_auto_resume_sync_ssh(),
             codex_auto_apply_reset_before_expiration_enabled:
                 default_codex_auto_apply_reset_before_expiration_enabled(),
             quota_alert_enabled: default_quota_alert_enabled(),
@@ -2065,6 +2080,18 @@ pub fn load_user_config() -> Result<UserConfig, String> {
             obj.insert(
                 "codex_auto_resume_sync_ssh".to_string(),
                 json!(default_codex_auto_resume_sync_ssh()),
+            );
+        }
+        if !obj.contains_key("antigravity_auto_resume_interrupted_tasks_enabled") {
+            obj.insert(
+                "antigravity_auto_resume_interrupted_tasks_enabled".to_string(),
+                json!(default_antigravity_auto_resume_interrupted_tasks_enabled()),
+            );
+        }
+        if !obj.contains_key("antigravity_auto_resume_sync_ssh") {
+            obj.insert(
+                "antigravity_auto_resume_sync_ssh".to_string(),
+                json!(default_antigravity_auto_resume_sync_ssh()),
             );
         }
         if !obj.contains_key("codex_auto_apply_reset_before_expiration_enabled") {

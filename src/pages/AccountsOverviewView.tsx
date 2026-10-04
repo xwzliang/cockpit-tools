@@ -6,6 +6,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { TagEditModal } from '../components/TagEditModal';
 import { ExportJsonModal } from '../components/ExportJsonModal';
 import { PaginationControls } from '../components/PaginationControls';
+import { AntigravityAutoResumeSection } from '../components/antigravity/AntigravityAutoResumeSection';
 import { SingleSelectFilterDropdown } from '../components/SingleSelectFilterDropdown';
 import { AccountGroupModal, AddToGroupModal } from '../components/AccountGroupModal';
 import { GroupAccountPickerModal } from '../components/GroupAccountPickerModal';
@@ -626,6 +627,8 @@ export function AccountsOverviewView(props: AccountsOverviewViewProps) {
           onPreviousPage={pagination.goToPreviousPage}
           onNextPage={pagination.goToNextPage}
         />
+
+        <AntigravityAutoResumeSection variant="overview" />
       </main>
 
       {/* Add Account Modal */}

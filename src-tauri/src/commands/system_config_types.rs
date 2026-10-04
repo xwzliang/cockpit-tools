@@ -277,6 +277,10 @@ pub struct GeneralConfig {
     pub codex_auto_resume_interrupted_tasks_enabled: bool,
     /// 自动恢复是否包含 SSH 服务器
     pub codex_auto_resume_sync_ssh: bool,
+    /// 是否启用 Antigravity 受限中断任务自动恢复
+    pub antigravity_auto_resume_interrupted_tasks_enabled: bool,
+    /// Antigravity 自动恢复是否包含 SSH 服务器
+    pub antigravity_auto_resume_sync_ssh: bool,
     /// 是否启用配额预警通知
     pub quota_alert_enabled: bool,
     /// 配额预警阈值（百分比）
@@ -1237,6 +1241,8 @@ fn is_general_config_patch_field(key: &str) -> bool {
             | "codex_auto_switch_selected_account_ids"
             | "codex_auto_resume_interrupted_tasks_enabled"
             | "codex_auto_resume_sync_ssh"
+            | "antigravity_auto_resume_interrupted_tasks_enabled"
+            | "antigravity_auto_resume_sync_ssh"
             | "quota_alert_enabled"
             | "quota_alert_threshold"
             | "codex_quota_alert_enabled"

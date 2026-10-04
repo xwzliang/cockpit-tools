@@ -246,6 +246,8 @@ interface GeneralConfig {
   codex_auto_switch_selected_account_ids?: string[];
   codex_auto_resume_interrupted_tasks_enabled?: boolean;
   codex_auto_resume_sync_ssh?: boolean;
+  antigravity_auto_resume_interrupted_tasks_enabled?: boolean;
+  antigravity_auto_resume_sync_ssh?: boolean;
   codex_auto_apply_reset_before_expiration_enabled?: boolean;
   quota_alert_enabled: boolean;
   quota_alert_threshold: number;
@@ -686,6 +688,11 @@ export function useSettingsPageController() {
   const [codexAutoResumeInterruptedTasksEnabled, setCodexAutoResumeInterruptedTasksEnabled] =
     useState(false);
   const [codexAutoResumeSyncSsh, setCodexAutoResumeSyncSsh] = useState(true);
+  const [
+    antigravityAutoResumeInterruptedTasksEnabled,
+    setAntigravityAutoResumeInterruptedTasksEnabled,
+  ] = useState(false);
+  const [antigravityAutoResumeSyncSsh, setAntigravityAutoResumeSyncSsh] = useState(true);
   const [
     codexAutoApplyResetBeforeExpirationEnabled,
     setCodexAutoApplyResetBeforeExpirationEnabled,
@@ -1177,6 +1184,9 @@ export function useSettingsPageController() {
       codex_auto_switch_selected_account_ids: codexAutoSwitchSelectedAccountIds,
       codex_auto_resume_interrupted_tasks_enabled: codexAutoResumeInterruptedTasksEnabled,
       codex_auto_resume_sync_ssh: codexAutoResumeSyncSsh,
+      antigravity_auto_resume_interrupted_tasks_enabled:
+        antigravityAutoResumeInterruptedTasksEnabled,
+      antigravity_auto_resume_sync_ssh: antigravityAutoResumeSyncSsh,
       codex_auto_apply_reset_before_expiration_enabled:
         codexAutoApplyResetBeforeExpirationEnabled,
       quota_alert_enabled: quotaAlertEnabled,
@@ -1804,6 +1814,10 @@ export function useSettingsPageController() {
         config.codex_auto_resume_interrupted_tasks_enabled ?? false,
       );
       setCodexAutoResumeSyncSsh(config.codex_auto_resume_sync_ssh ?? true);
+      setAntigravityAutoResumeInterruptedTasksEnabled(
+        config.antigravity_auto_resume_interrupted_tasks_enabled ?? false,
+      );
+      setAntigravityAutoResumeSyncSsh(config.antigravity_auto_resume_sync_ssh ?? true);
       setCodexAutoApplyResetBeforeExpirationEnabled(
         config.codex_auto_apply_reset_before_expiration_enabled ?? true,
       );
