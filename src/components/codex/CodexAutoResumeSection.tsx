@@ -25,6 +25,7 @@ import {
   getAutoResumedTasks,
   clearAutoResumedTasks,
   resumeInterruptedCodexTask,
+  setCodexTaskExcluded,
   type InterruptedCodexTask,
   type ResumedTaskRecord,
 } from '../../services/codexAutoResumeService';
@@ -51,6 +52,7 @@ export function CodexAutoResumeSection({
   });
   const [autoResumeEnabled, setAutoResumeEnabled] = useState(false);
   const [syncSshEnabled, setSyncSshEnabled] = useState(true);
+  const [autoApplyExpiringResetEnabled, setAutoApplyExpiringResetEnabled] = useState(true);
   const [resumingTaskId, setResumingTaskId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,9 +100,11 @@ export function CodexAutoResumeSection({
       const cfg = await invoke<{
         codex_auto_resume_interrupted_tasks_enabled?: boolean;
         codex_auto_resume_sync_ssh?: boolean;
+        codex_auto_apply_reset_before_expiration_enabled?: boolean;
       }>('get_general_config');
       setAutoResumeEnabled(Boolean(cfg.codex_auto_resume_interrupted_tasks_enabled));
       setSyncSshEnabled(cfg.codex_auto_resume_sync_ssh ?? true);
+      setAutoApplyExpiringResetEnabled(cfg.codex_auto_apply_reset_before_expiration_enabled ?? true);
     } catch (err) {
       console.warn('Failed to load general config in auto resume section:', err);
     }
@@ -136,6 +140,33 @@ export function CodexAutoResumeSection({
       }, 300);
     } catch (err) {
       console.error('Failed to patch sync ssh config:', err);
+    }
+  };
+
+  const handleToggleAutoApplyExpiringReset = async (enabled: boolean) => {
+    setAutoApplyExpiringResetEnabled(enabled);
+    try {
+      await invoke('patch_general_config', {
+        updates: {
+          codex_auto_apply_reset_before_expiration_enabled: enabled,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to patch auto apply expiring reset config:', err);
+    }
+  };
+
+  const handleToggleTaskExcluded = async (taskId: string, excluded: boolean) => {
+    setInterruptedTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, is_excluded: excluded } : t)),
+    );
+    try {
+      await setCodexTaskExcluded(taskId, excluded);
+    } catch (err) {
+      console.error('Failed to update task exclusion:', err);
+      setInterruptedTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, is_excluded: !excluded } : t)),
+      );
     }
   };
 
@@ -393,6 +424,24 @@ export function CodexAutoResumeSection({
               {t('codex.autoResume.syncSshTitle', '包含远程 SSH 服务器')}
             </span>
           </div>
+
+          <div className="codex-auto-resume-setting-item">
+            <label className="switch switch-sm">
+              <input
+                type="checkbox"
+                checked={autoApplyExpiringResetEnabled}
+                onChange={(e) => void handleToggleAutoApplyExpiringReset(e.target.checked)}
+              />
+              <span className="slider"></span>
+            </label>
+            <span
+              className="setting-label"
+              title={t('codex.autoResume.autoApplyExpiringResetTooltip', '当重置额度距离到期时间不足 10 分钟时自动使用，避免过期作废')}
+              onClick={() => void handleToggleAutoApplyExpiringReset(!autoApplyExpiringResetEnabled)}
+            >
+              {t('codex.autoResume.autoApplyExpiringResetTitle', '重置额度到期前 10 分钟自动使用')}
+            </span>
+          </div>
         </div>
       )}
 
@@ -478,7 +527,32 @@ export function CodexAutoResumeSection({
                             {t('codex.autoResume.waitingQuota', '等待配额')}
                           </span>
                         )}
+
+                        {task.is_excluded && (
+                          <span className="codex-task-tag codex-task-tag--excluded">
+                            {t('codex.autoResume.taskExcludedBadge', '已排除自动恢复')}
+                          </span>
+                        )}
                       </div>
+
+                      {autoResumeEnabled && (
+                        <label
+                          className={`codex-task-auto-resume-checkbox ${task.is_excluded ? 'is-excluded' : 'is-included'}`}
+                          title={
+                            task.is_excluded
+                              ? t('codex.autoResume.taskExcludedTooltip', '已排除：配额恢复后不会自动恢复此任务')
+                              : t('codex.autoResume.taskIncludedTooltip', '配额恢复后将自动恢复此任务')
+                          }
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!task.is_excluded}
+                            onChange={() => void handleToggleTaskExcluded(task.id, !task.is_excluded)}
+                          />
+                          <span>{t('codex.autoResume.taskCheckboxLabel', '自动恢复')}</span>
+                        </label>
+                      )}
                     </div>
 
                     <div className="codex-task-card__title">

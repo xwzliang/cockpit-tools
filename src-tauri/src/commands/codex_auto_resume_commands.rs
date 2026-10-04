@@ -22,3 +22,19 @@ pub fn codex_get_auto_resumed_tasks(
 pub fn codex_clear_auto_resumed_tasks() -> Result<(), String> {
     crate::modules::codex_auto_resume::clear_resumed_task_records()
 }
+
+#[tauri::command]
+pub fn codex_get_auto_resume_excluded_tasks() -> Result<Vec<String>, String> {
+    Ok(crate::modules::codex_auto_resume::load_excluded_task_ids()
+        .into_iter()
+        .collect())
+}
+
+#[tauri::command]
+pub fn codex_set_auto_resume_task_excluded(
+    task_id: String,
+    excluded: bool,
+) -> Result<(), String> {
+    crate::modules::codex_auto_resume::set_task_excluded(&task_id, excluded)
+}
+

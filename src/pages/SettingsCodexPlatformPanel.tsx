@@ -22,6 +22,8 @@ export function SettingsCodexPlatformPanel(props: SettingsPageViewProps) {
     codexAutoSwitchSelectedAccountIds,
     codexAutoResumeInterruptedTasksEnabled,
     codexAutoResumeSyncSsh,
+    codexAutoApplyResetBeforeExpirationEnabled,
+    setCodexAutoApplyResetBeforeExpirationEnabled,
     codexGroups,
     codexHideRelayQuota,
     codexLaunchCandidates,
@@ -270,6 +272,8 @@ export function SettingsCodexPlatformPanel(props: SettingsPageViewProps) {
                 onEnabledChange={setCodexAutoResumeInterruptedTasksEnabled}
                 syncSsh={codexAutoResumeSyncSsh}
                 onSyncSshChange={setCodexAutoResumeSyncSsh}
+                autoApplyExpiringReset={codexAutoApplyResetBeforeExpirationEnabled}
+                onAutoApplyExpiringResetChange={setCodexAutoApplyResetBeforeExpirationEnabled}
               />
 
               <CodexContextManagementControl variant="settings" />

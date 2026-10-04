@@ -4790,7 +4790,16 @@
       "remainingHoursMinutesSeconds": "距离配额重置还剩 {{hours}} 小时 {{minutes}} 分钟 {{seconds}} 秒",
       "remainingMinutesSeconds": "距离配额重置还剩 {{minutes}} 分钟 {{seconds}} 秒",
       "statusEnabled": "自动恢复已开启",
-      "statusDisabled": "自动恢复未开启"
+      "statusDisabled": "自动恢复未开启",
+      "autoApplyExpiringResetTitle": "重置额度到期前 10 分钟自动使用",
+      "autoApplyExpiringResetDesc": "当账号的重置额度距离到期不足 10 分钟时，自动执行重置以避免额度过期作废。",
+      "autoApplyExpiringResetTooltip": "当重置额度距离到期时间不足 10 分钟时自动使用，避免过期作废",
+      "taskIncludedTooltip": "配额恢复后将自动恢复此任务",
+      "taskExcludedTooltip": "已排除：配额恢复后不会自动恢复此任务",
+      "taskCheckboxLabel": "自动恢复",
+      "taskExcludedBadge": "已排除自动恢复",
+      "excludedNotice": "已暂停自动恢复，可点击右侧按钮手动恢复",
+      "autoResetExpiringExecutedToast": "账号 {{email}} 的重置额度即将到期（不足 10 分钟），已自动使用以防过期浪费。"
     },
     "exportAuthFailed": "导出失败账号",
     "exportAuthFailedTitle": "导出全部授权失败账号",

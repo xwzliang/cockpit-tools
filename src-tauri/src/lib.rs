@@ -1090,6 +1090,8 @@ pub fn run() {
             commands::codex::codex_resume_interrupted_task,
             commands::codex::codex_get_auto_resumed_tasks,
             commands::codex::codex_clear_auto_resumed_tasks,
+            commands::codex::codex_get_auto_resume_excluded_tasks,
+            commands::codex::codex_set_auto_resume_task_excluded,
             commands::codex::load_codex_account_groups,
             commands::codex::save_codex_account_groups,
             commands::codex::load_codex_model_providers,

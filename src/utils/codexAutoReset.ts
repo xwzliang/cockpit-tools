@@ -257,6 +257,36 @@ export function shouldTriggerCodexAutoReset(
   return weeklyPercentage <= 1;
 }
 
+/**
+ * Checks whether an account has an available reset credit expiring within 10 minutes (600s).
+ */
+export function shouldTriggerCodexExpiringAutoReset(
+  account: CodexAccount,
+  nowSec = Math.floor(Date.now() / 1000),
+): boolean {
+  if (!account?.id) return false;
+  if (
+    isCodexApiKeyAccount(account) ||
+    isCodexAgentIdentityAccount(account) ||
+    isCodexPendingOAuthAccount(account)
+  ) {
+    return false;
+  }
+
+  const availableCount = getCodexAvailableResetCreditsCount(account);
+  if (availableCount <= 0) {
+    return false;
+  }
+
+  const earliestExpiresAt = getCodexEarliestResetCreditExpiresAt(account);
+  if (earliestExpiresAt == null) {
+    return false;
+  }
+
+  // 10 minutes before expiration: expires_at - 600 <= now < expires_at
+  return nowSec >= earliestExpiresAt - 600 && nowSec < earliestExpiresAt;
+}
+
 export const CODEX_AUTO_RESET_EXECUTED_EVENT_NAME = 'codex:auto-reset-executed';
 
 export function subscribeCodexAutoReset(listener: () => void): () => void {

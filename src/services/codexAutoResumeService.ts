@@ -18,6 +18,7 @@ export interface InterruptedCodexTask {
   reset_window_minutes?: number | null;
   updated_at: number;
   can_resume: boolean;
+  is_excluded?: boolean;
 }
 
 export interface ResumeTaskResult {
@@ -62,5 +63,13 @@ export async function getAutoResumedTasks(): Promise<ResumedTaskRecord[]> {
 
 export async function clearAutoResumedTasks(): Promise<void> {
   return await invoke<void>('codex_clear_auto_resumed_tasks');
+}
+
+export async function getCodexExcludedTasks(): Promise<string[]> {
+  return await invoke<string[]>('codex_get_auto_resume_excluded_tasks');
+}
+
+export async function setCodexTaskExcluded(taskId: string, excluded: boolean): Promise<void> {
+  return await invoke<void>('codex_set_auto_resume_task_excluded', { taskId, excluded });
 }
 

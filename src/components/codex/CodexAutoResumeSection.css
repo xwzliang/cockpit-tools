@@ -599,3 +599,44 @@
     transform: rotate(360deg);
   }
 }
+
+.codex-task-auto-resume-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-normal, #e5e7eb);
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.codex-task-auto-resume-checkbox:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.codex-task-auto-resume-checkbox input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+  accent-color: #10b981;
+}
+
+.codex-task-auto-resume-checkbox.is-excluded {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.25);
+  color: var(--text-muted, #9ca3af);
+}
+
+.codex-task-tag--excluded {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border: 1px dashed rgba(239, 68, 68, 0.35);
+}
+

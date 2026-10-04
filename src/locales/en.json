@@ -4790,7 +4790,16 @@
       "remainingHoursMinutesSeconds": "{{hours}}h {{minutes}}m {{seconds}}s remaining until quota reset",
       "remainingMinutesSeconds": "{{minutes}}m {{seconds}}s remaining until quota reset",
       "statusEnabled": "Auto Resume Active",
-      "statusDisabled": "Auto Resume Inactive"
+      "statusDisabled": "Auto Resume Inactive",
+      "autoApplyExpiringResetTitle": "Auto-apply reset 10m before expiry",
+      "autoApplyExpiringResetDesc": "Automatically apply an available reset credit 10 minutes before its expiration time so it won't be wasted.",
+      "autoApplyExpiringResetTooltip": "Automatically consume reset credit 10 minutes before expiration to avoid expiration loss",
+      "taskIncludedTooltip": "Task will be automatically resumed once quota is renewed",
+      "taskExcludedTooltip": "Excluded: task will not be automatically resumed",
+      "taskCheckboxLabel": "Auto-resume",
+      "taskExcludedBadge": "Auto-resume excluded",
+      "excludedNotice": "Auto-resume paused, click the resume button to run manually",
+      "autoResetExpiringExecutedToast": "Account {{email}}'s reset credit is expiring in less than 10 minutes and has been automatically applied to avoid expiration."
     },
     "exportAuthFailed": "Export failed",
     "exportAuthFailedTitle": "Export all auth-failed accounts",

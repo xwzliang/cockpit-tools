@@ -3,7 +3,7 @@ use crate::modules::{config, logger, ssh_server};
 use chrono::Utc;
 use rusqlite::OpenFlags;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::process::Stdio;
@@ -49,6 +49,8 @@ pub struct InterruptedCodexTask {
     pub updated_at: i64,
     #[serde(default)]
     pub can_resume: bool,
+    #[serde(default)]
+    pub is_excluded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +116,42 @@ pub fn clear_resumed_task_records() -> Result<(), String> {
         let _ = crate::modules::atomic_write::write_string_atomic(&path, "[]");
     }
     Ok(())
+}
+
+const EXCLUDED_TASKS_FILE: &str = "codex_auto_resume_excluded_tasks.json";
+
+fn excluded_tasks_file_path() -> Result<std::path::PathBuf, String> {
+    Ok(crate::modules::account::get_data_dir()?.join(EXCLUDED_TASKS_FILE))
+}
+
+pub fn load_excluded_task_ids() -> std::collections::HashSet<String> {
+    let path = match excluded_tasks_file_path() {
+        Ok(p) => p,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    if !path.exists() {
+        return std::collections::HashSet::new();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+pub fn save_excluded_task_ids(ids: &std::collections::HashSet<String>) -> Result<(), String> {
+    let path = excluded_tasks_file_path()?;
+    let content = serde_json::to_string_pretty(ids).map_err(|e| e.to_string())?;
+    crate::modules::atomic_write::write_string_atomic(&path, &content)
+}
+
+pub fn set_task_excluded(task_id: &str, excluded: bool) -> Result<(), String> {
+    let mut ids = load_excluded_task_ids();
+    if excluded {
+        ids.insert(task_id.to_string());
+    } else {
+        ids.remove(task_id);
+    }
+    save_excluded_task_ids(&ids)
 }
 
 const PYTHON_REMOTE_PROBE: &str = r#"
@@ -447,6 +485,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                             reset_window_minutes,
                             updated_at,
                             can_resume,
+                            is_excluded: false,
                         });
                     }
                 }
@@ -510,6 +549,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                                 reset_window_minutes,
                                 updated_at,
                                 can_resume,
+                                is_excluded: false,
                             });
                         }
                     }
@@ -581,6 +621,11 @@ pub async fn detect_all_interrupted_tasks() -> Vec<InterruptedCodexTask> {
                 logger::log_warn(&format!("[CodexAutoResume] list_servers 失败: {}", e));
             }
         }
+    }
+
+    let excluded = load_excluded_task_ids();
+    for task in &mut all_tasks {
+        task.is_excluded = excluded.contains(&task.id) || excluded.contains(&task.thread_id);
     }
 
     all_tasks
@@ -733,7 +778,7 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
     let now_ts = Utc::now().timestamp();
 
     for task in tasks {
-        if !task.can_resume {
+        if !task.can_resume || task.is_excluded {
             continue;
         }
 
@@ -808,6 +853,155 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
     }
 }
 
+static CONSUMED_EXPIRING_CREDITS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn consumed_expiring_credits() -> &'static Mutex<HashSet<String>> {
+    CONSUMED_EXPIRING_CREDITS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+pub async fn check_and_auto_apply_expiring_resets(app: &AppHandle) {
+    let cfg = config::get_user_config();
+    if !cfg.codex_auto_apply_reset_before_expiration_enabled {
+        return;
+    }
+
+    let accounts = crate::modules::codex_account::list_accounts();
+    let now_ts = Utc::now().timestamp();
+
+    for account in accounts {
+        if account.is_api_key_auth() {
+            continue;
+        }
+
+        let quota = match &account.quota {
+            Some(q) => q,
+            None => continue,
+        };
+
+        let reset_credits = &quota.reset_credits;
+
+        // Find earliest available reset credit expiry
+        let mut earliest_expires_at: Option<i64> = None;
+        let mut has_available = false;
+
+        for credit in reset_credits {
+            let status = credit.status.as_deref().unwrap_or("available").to_lowercase();
+            if status == "redeemed" || status == "used" || status == "consumed" || status == "expired" {
+                continue;
+            }
+            if let Some(exp) = credit.expires_at {
+                if exp <= now_ts {
+                    continue;
+                }
+                has_available = true;
+                if earliest_expires_at.is_none() || Some(exp) < earliest_expires_at {
+                    earliest_expires_at = Some(exp);
+                }
+            } else {
+                has_available = true;
+            }
+        }
+
+        if !has_available {
+            continue;
+        }
+
+        if earliest_expires_at.is_none() {
+            if let Some(next_exp) = quota.reset_credits_next_expires_at {
+                if next_exp > now_ts {
+                    earliest_expires_at = Some(next_exp);
+                }
+            }
+        }
+
+        let Some(expires_at) = earliest_expires_at else {
+            continue;
+        };
+
+        // 10 minutes (600s) before expiration
+        if now_ts < expires_at - 600 || now_ts >= expires_at {
+            continue;
+        }
+
+        let credit_dedup_key = format!("{}:{}", account.id, expires_at);
+        {
+            let mut consumed = consumed_expiring_credits().lock().unwrap_or_else(|e| e.into_inner());
+            if consumed.contains(&credit_dedup_key) {
+                continue;
+            }
+            consumed.insert(credit_dedup_key.clone());
+        }
+
+        logger::log_info(&format!(
+            "[CodexAutoReset] 账号 {} 的重置额度将在 10 分钟内到期 (expires_at={}, now={})，触发自动使用以防过期浪费",
+            account.id, expires_at, now_ts
+        ));
+
+        let account_id = account.id.clone();
+        let account_email = account.email.clone();
+        let app_handle = app.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let res = crate::modules::codex_quota::consume_reset_credit(&account_id).await;
+            match res {
+                Ok(_) => {
+                    logger::log_info(&format!(
+                        "[CodexAutoReset] 成功为账号 {} 自动使用即将到期的重置额度",
+                        account_id
+                    ));
+
+                    let title = "Codex 重置额度已自动使用";
+                    let body = format!(
+                        "账号 {} 的重置额度即将在 10 分钟内到期，已自动使用以防过期浪费。",
+                        account_email
+                    );
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        let bundle_identifier = app_handle.config().identifier.clone();
+                        let mut notification = mac_notification_sys::Notification::new();
+                        notification.title(title).message(&body);
+                        let _ = mac_notification_sys::set_application(&bundle_identifier);
+                        let _ = notification.send();
+                    }
+
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        use tauri_plugin_notification::NotificationExt;
+                        let _ = app_handle
+                            .notification()
+                            .builder()
+                            .title(title)
+                            .body(&body)
+                            .show();
+                    }
+
+                    let _ = app_handle.emit(
+                        "codex://reset-credit-auto-consumed",
+                        serde_json::json!({
+                            "accountId": account_id,
+                            "accountEmail": account_email,
+                            "reason": "expiring",
+                            "expiresAt": expires_at,
+                        }),
+                    );
+
+                    let _ = crate::modules::codex_quota::refresh_account_quota(&account_id).await;
+                    let _ = crate::modules::tray::update_tray_menu(&app_handle);
+                }
+                Err(err) => {
+                    logger::log_warn(&format!(
+                        "[CodexAutoReset] 为账号 {} 自动使用重置额度失败: {}",
+                        account_id, err
+                    ));
+                    let mut consumed = consumed_expiring_credits().lock().unwrap_or_else(|e| e.into_inner());
+                    consumed.remove(&credit_dedup_key);
+                }
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -829,6 +1023,17 @@ mod tests {
                 assert_eq!(tasks[0].resets_at, Some(1791138029));
             }
         }
+    }
+
+    #[test]
+    fn test_task_exclusion_logic() {
+        let test_task_id = "test:exclude:123";
+        let _ = set_task_excluded(test_task_id, false);
+        assert!(!load_excluded_task_ids().contains(test_task_id));
+        set_task_excluded(test_task_id, true).unwrap();
+        assert!(load_excluded_task_ids().contains(test_task_id));
+        set_task_excluded(test_task_id, false).unwrap();
+        assert!(!load_excluded_task_ids().contains(test_task_id));
     }
 }
 

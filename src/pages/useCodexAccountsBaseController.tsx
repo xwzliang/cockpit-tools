@@ -2372,6 +2372,30 @@ export function useCodexAccountsBaseController() {
         }
       });
     }, [setMessage, t]);
+
+    useEffect(() => {
+      let unlisten: (() => void) | undefined;
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        listen<{ accountId: string; accountEmail: string; reason: string }>(
+          'codex://reset-credit-auto-consumed',
+          (event) => {
+            const email = event.payload.accountEmail || event.payload.accountId;
+            setMessage({
+              text: t('codex.autoResume.autoResetExpiringExecutedToast', {
+                email,
+                defaultValue: `账号 ${email} 的重置额度即将到期（不足 10 分钟），已自动使用以防过期浪费。`,
+              }),
+            });
+            void store.refreshQuota(event.payload.accountId);
+          },
+        ).then((fn) => {
+          unlisten = fn;
+        });
+      });
+      return () => {
+        unlisten?.();
+      };
+    }, [setMessage, store, t]);
   
     const handleRefreshSubscriptionInfo = useCallback(
       async (accountId: string) => {

@@ -10,6 +10,7 @@ import {
   isCodexAutoResetArmed,
   readArmedAccountIds,
   shouldTriggerCodexAutoReset,
+  shouldTriggerCodexExpiringAutoReset,
   executeCodexAutoResetIfEligible,
 } from '../src/utils/codexAutoReset.ts';
 import { CodexAccount } from '../src/types/codex.ts';
@@ -230,6 +231,54 @@ describe('codexAutoReset helpers', () => {
       authorization_status: 'pending',
     };
     assert.equal(shouldTriggerCodexAutoReset(pendingAccount), false);
+  });
+
+  it('triggers expiring auto-reset when credit is expiring in <= 10 minutes', () => {
+    const nowSec = 1700000000;
+    const baseAccount = {
+      id: 'acc-expiring',
+      email: 'test-expiring@example.com',
+      tokens: { access_token: 'tok' },
+      created_at: Date.now(),
+      last_used: Date.now(),
+      quota: {
+        reset_credits_available: 1,
+        reset_credits_next_expires_at: nowSec + 300, // 5 mins left -> <= 10m -> trigger
+      },
+    } as unknown as CodexAccount;
+
+    // 5 minutes remaining -> triggers
+    assert.equal(shouldTriggerCodexExpiringAutoReset(baseAccount, nowSec), true);
+
+    // Exactly 10 minutes (600s) remaining -> triggers
+    const tenMinAccount = {
+      ...baseAccount,
+      quota: {
+        reset_credits_available: 1,
+        reset_credits_next_expires_at: nowSec + 600,
+      },
+    } as unknown as CodexAccount;
+    assert.equal(shouldTriggerCodexExpiringAutoReset(tenMinAccount, nowSec), true);
+
+    // 15 minutes remaining -> does NOT trigger
+    const fifteenMinAccount = {
+      ...baseAccount,
+      quota: {
+        reset_credits_available: 1,
+        reset_credits_next_expires_at: nowSec + 900,
+      },
+    } as unknown as CodexAccount;
+    assert.equal(shouldTriggerCodexExpiringAutoReset(fifteenMinAccount, nowSec), false);
+
+    // Already expired -> does NOT trigger
+    const expiredAccount = {
+      ...baseAccount,
+      quota: {
+        reset_credits_available: 1,
+        reset_credits_next_expires_at: nowSec - 10,
+      },
+    } as unknown as CodexAccount;
+    assert.equal(shouldTriggerCodexExpiringAutoReset(expiredAccount, nowSec), false);
   });
 
   it('executes auto-reset in a single-shot manner and immediately unchecks/disarms', async () => {

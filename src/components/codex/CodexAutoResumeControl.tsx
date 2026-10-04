@@ -8,6 +8,8 @@ interface CodexAutoResumeControlProps {
   onEnabledChange: (enabled: boolean) => void;
   syncSsh: boolean;
   onSyncSshChange: (syncSsh: boolean) => void;
+  autoApplyExpiringReset?: boolean;
+  onAutoApplyExpiringResetChange?: (enabled: boolean) => void;
 }
 
 export function CodexAutoResumeControl({
@@ -15,6 +17,8 @@ export function CodexAutoResumeControl({
   onEnabledChange,
   syncSsh,
   onSyncSshChange,
+  autoApplyExpiringReset = true,
+  onAutoApplyExpiringResetChange,
 }: CodexAutoResumeControlProps) {
   const { t } = useTranslation();
   const [modalOpen, setModalOpen] = useState(false);
@@ -82,6 +86,30 @@ export function CodexAutoResumeControl({
           </div>
         </div>
       )}
+
+      <div className="settings-row">
+        <div className="row-label">
+          <div className="row-title">
+            {t('codex.autoResume.autoApplyExpiringResetTitle', '重置额度到期前 10 分钟自动使用')}
+          </div>
+          <div className="row-desc">
+            {t(
+              'codex.autoResume.autoApplyExpiringResetDesc',
+              '当账号的重置额度距离到期不足 10 分钟时，自动执行重置以避免额度过期作废。',
+            )}
+          </div>
+        </div>
+        <div className="row-control">
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={autoApplyExpiringReset}
+              onChange={(e) => onAutoApplyExpiringResetChange?.(e.target.checked)}
+            />
+            <span className="slider"></span>
+          </label>
+        </div>
+      </div>
 
       <CodexInterruptedTasksModal
         open={modalOpen}

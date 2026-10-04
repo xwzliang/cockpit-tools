@@ -246,6 +246,7 @@ interface GeneralConfig {
   codex_auto_switch_selected_account_ids?: string[];
   codex_auto_resume_interrupted_tasks_enabled?: boolean;
   codex_auto_resume_sync_ssh?: boolean;
+  codex_auto_apply_reset_before_expiration_enabled?: boolean;
   quota_alert_enabled: boolean;
   quota_alert_threshold: number;
   codex_quota_alert_enabled: boolean;
@@ -685,6 +686,10 @@ export function useSettingsPageController() {
   const [codexAutoResumeInterruptedTasksEnabled, setCodexAutoResumeInterruptedTasksEnabled] =
     useState(false);
   const [codexAutoResumeSyncSsh, setCodexAutoResumeSyncSsh] = useState(true);
+  const [
+    codexAutoApplyResetBeforeExpirationEnabled,
+    setCodexAutoApplyResetBeforeExpirationEnabled,
+  ] = useState(true);
   const [quotaAlertEnabled, setQuotaAlertEnabled] = useState(false);
   const [quotaAlertThreshold, setQuotaAlertThreshold] = useState('20');
   const [codexQuotaAlertEnabled, setCodexQuotaAlertEnabled] = useState(false);
@@ -1172,6 +1177,8 @@ export function useSettingsPageController() {
       codex_auto_switch_selected_account_ids: codexAutoSwitchSelectedAccountIds,
       codex_auto_resume_interrupted_tasks_enabled: codexAutoResumeInterruptedTasksEnabled,
       codex_auto_resume_sync_ssh: codexAutoResumeSyncSsh,
+      codex_auto_apply_reset_before_expiration_enabled:
+        codexAutoApplyResetBeforeExpirationEnabled,
       quota_alert_enabled: quotaAlertEnabled,
       quota_alert_threshold: Number.isNaN(parsedQuotaAlertThreshold)
         ? 20
@@ -1797,6 +1804,9 @@ export function useSettingsPageController() {
         config.codex_auto_resume_interrupted_tasks_enabled ?? false,
       );
       setCodexAutoResumeSyncSsh(config.codex_auto_resume_sync_ssh ?? true);
+      setCodexAutoApplyResetBeforeExpirationEnabled(
+        config.codex_auto_apply_reset_before_expiration_enabled ?? true,
+      );
       setQuotaAlertEnabled(config.quota_alert_enabled ?? false);
       setQuotaAlertThreshold(String(config.quota_alert_threshold ?? 20));
       setCodexQuotaAlertEnabled(config.codex_quota_alert_enabled ?? false);
@@ -3287,6 +3297,7 @@ export function useSettingsPageController() {
     codexAutoSwitchSelectedAccountIds,
     codexAutoResumeInterruptedTasksEnabled,
     codexAutoResumeSyncSsh,
+    codexAutoApplyResetBeforeExpirationEnabled,
     codexGroups,
     codexHideRelayQuota,
     codexLaunchCandidates,
@@ -3479,6 +3490,7 @@ export function useSettingsPageController() {
     setCodexAutoSwitchSelectedAccountIds,
     setCodexAutoResumeInterruptedTasksEnabled,
     setCodexAutoResumeSyncSsh,
+    setCodexAutoApplyResetBeforeExpirationEnabled,
     setCodexHideRelayQuota,
     setCodexLaunchCandidates,
     setCodexLaunchOnSwitch,

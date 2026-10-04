@@ -463,6 +463,9 @@ pub struct UserConfig {
     /// 自动恢复是否包含 SSH 服务器
     #[serde(default = "default_codex_auto_resume_sync_ssh")]
     pub codex_auto_resume_sync_ssh: bool,
+    /// 是否在重置额度到期前 10 分钟自动使用重置（避免过期浪费）
+    #[serde(default = "default_codex_auto_apply_reset_before_expiration_enabled")]
+    pub codex_auto_apply_reset_before_expiration_enabled: bool,
     /// 是否启用配额预警通知
     #[serde(default = "default_quota_alert_enabled")]
     pub quota_alert_enabled: bool,
@@ -1085,6 +1088,9 @@ fn default_codex_auto_resume_interrupted_tasks_enabled() -> bool {
 fn default_codex_auto_resume_sync_ssh() -> bool {
     true
 }
+fn default_codex_auto_apply_reset_before_expiration_enabled() -> bool {
+    true
+}
 fn default_quota_alert_enabled() -> bool {
     false
 }
@@ -1335,6 +1341,8 @@ impl Default for UserConfig {
             codex_auto_resume_interrupted_tasks_enabled:
                 default_codex_auto_resume_interrupted_tasks_enabled(),
             codex_auto_resume_sync_ssh: default_codex_auto_resume_sync_ssh(),
+            codex_auto_apply_reset_before_expiration_enabled:
+                default_codex_auto_apply_reset_before_expiration_enabled(),
             quota_alert_enabled: default_quota_alert_enabled(),
             quota_alert_threshold: default_quota_alert_threshold(),
             codex_quota_alert_enabled: default_codex_quota_alert_enabled(),
@@ -2057,6 +2065,12 @@ pub fn load_user_config() -> Result<UserConfig, String> {
             obj.insert(
                 "codex_auto_resume_sync_ssh".to_string(),
                 json!(default_codex_auto_resume_sync_ssh()),
+            );
+        }
+        if !obj.contains_key("codex_auto_apply_reset_before_expiration_enabled") {
+            obj.insert(
+                "codex_auto_apply_reset_before_expiration_enabled".to_string(),
+                json!(default_codex_auto_apply_reset_before_expiration_enabled()),
             );
         }
         if !obj.contains_key("codex_auto_switch_primary_threshold") {
