@@ -173,6 +173,7 @@ def parse_rollout_tail(rollout_path):
         reset_window_minutes = None
         error_msg = None
         is_usage_limited = False
+        has_task_complete = False
         
         for line in reversed(lines):
             line = line.strip()
@@ -186,15 +187,28 @@ def parse_rollout_tail(rollout_path):
             p_type = payload.get("type")
             
             if p_type == "task_complete":
+                if has_task_complete:
+                    break
+                has_task_complete = True
+                
                 err = payload.get("error")
+                if err is None:
+                    # Latest turn completed cleanly without error!
+                    # Do not scan backwards into older turns for stale errors.
+                    break
+                
                 if isinstance(err, dict):
                     if error_msg is None:
                         error_msg = err.get("message")
                     code = err.get("codex_error_info")
                     if code == "usage_limit_exceeded" or (error_msg and "usage limit" in error_msg.lower()):
                         is_usage_limited = True
+            
+            elif p_type == "task_started":
+                # Reached the start of the latest turn. Do not look into older turns.
+                break
                         
-            if p_type == "token_count":
+            elif p_type == "token_count":
                 rl = payload.get("rate_limits", {})
                 pri = rl.get("primary")
                 if pri and isinstance(pri, dict):
@@ -295,7 +309,11 @@ def detect_interrupted_tasks():
             cur_s.execute("""
                 SELECT id, cwd, title, model, rollout_path, updated_at
                 FROM threads
-                WHERE archived = 0 AND updated_at > ?
+                WHERE archived = 0
+                  AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation'))
+                  AND (source IS NULL OR source NOT LIKE '%"subagent"%')
+                  AND (title IS NULL OR title != 'Guardian review')
+                  AND updated_at > ?
                 ORDER BY updated_at DESC LIMIT 50
             """, (now_ts - 7 * 86400,))
             for row in cur_s.fetchall():
@@ -505,6 +523,7 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
     let mut reset_window_minutes = None;
     let mut error_msg = None;
     let mut is_usage_limited = false;
+    let mut has_task_complete = false;
 
     for line in lines {
         let trimmed = line.trim();
@@ -516,6 +535,11 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
             let p_type = payload.and_then(|p| p.get("type")).and_then(|t| t.as_str());
 
             if p_type == Some("task_complete") {
+                if has_task_complete {
+                    break;
+                }
+                has_task_complete = true;
+
                 if let Some(err) = payload.and_then(|p| p.get("error")) {
                     if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
                         if error_msg.is_none() {
@@ -532,10 +556,15 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
                             is_usage_limited = true;
                         }
                     }
+                } else {
+                    // Latest turn completed cleanly without error!
+                    // Do not scan backwards into older turns for stale errors.
+                    break;
                 }
-            }
-
-            if p_type == Some("token_count") {
+            } else if p_type == Some("task_started") {
+                // Reached start of current turn; stop scanning older turns.
+                break;
+            } else if p_type == Some("token_count") {
                 if let Some(rl) = payload.and_then(|p| p.get("rate_limits")) {
                     if let Some(pri) = rl.get("primary") {
                         if resets_at.is_none() {
@@ -545,6 +574,9 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
                             reset_window_minutes =
                                 pri.get("window_minutes").and_then(|w| w.as_i64());
                         }
+                    }
+                    if rl.get("rate_limit_reached_type").is_some() {
+                        is_usage_limited = true;
                     }
                 }
             }
@@ -758,7 +790,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
         ) {
             let cutoff = now_ts - 7 * 86400;
             if let Ok(mut stmt) = conn_s.prepare(
-                "SELECT id, cwd, title, model, rollout_path, updated_at FROM threads WHERE archived = 0 AND updated_at > ? ORDER BY updated_at DESC LIMIT 50",
+                "SELECT id, cwd, title, model, rollout_path, updated_at FROM threads WHERE archived = 0 AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation')) AND (source IS NULL OR source NOT LIKE '%\"subagent\"%') AND (title IS NULL OR title != 'Guardian review') AND updated_at > ? ORDER BY updated_at DESC LIMIT 50",
             ) {
                 let rows = stmt.query_map([cutoff], |row| {
                     Ok((
