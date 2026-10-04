@@ -532,10 +532,171 @@ done
     Ok(())
 }
 
-/// 远端刷新 Codex app-server：daemon restart 必须有硬超时，避免整段 SSH 被挂死。
+/// 远端刷新 Codex app-server：
+/// 在 Linux 上执行深度进程终止（含 VS Code remote 进程和残留 host）与 daemon 重启，
+/// 并对齐 setup_codex_account_restart.sh 的权限与 identity 状态写入；非 Linux 下执行兼容回退。
 fn reload_app_server_script() -> &'static str {
     r#"set +e
-# 1) 优先 daemon restart，但限制 5s，防止 codex CLI 卡住拖垮同步
+os_platform="$(uname -s 2>/dev/null || echo Unknown)"
+codex_home="$1"
+case "$codex_home" in
+  "~") codex_home="$HOME" ;;
+  "~/"*) codex_home="$HOME/${codex_home#~/}" ;;
+esac
+[ -n "$codex_home" ] || codex_home="$HOME/.codex"
+
+if [ "$os_platform" = "Linux" ]; then
+  chmod 600 "$codex_home/auth.json" 2>/dev/null || true
+  chmod 600 "$codex_home/config.toml" 2>/dev/null || true
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$codex_home" <<'PY_EOF'
+import os, sys, signal, time, pathlib, json, hashlib, subprocess
+
+uid = os.getuid()
+codex_home = pathlib.Path(sys.argv[1]).expanduser()
+auth_file = codex_home / "auth.json"
+
+state_dir = pathlib.Path.home() / ".local" / "state" / "codex-auth-account-monitor"
+if auth_file.exists():
+    try:
+        doc = json.loads(auth_file.read_text(encoding="utf-8"))
+        ident = doc.get("tokens", {}).get("account_id") or doc.get("account_id")
+        if not ident and "tokens" in doc:
+            import base64
+            tok = doc["tokens"].get("id_token") or doc["tokens"].get("access_token")
+            if tok and "." in tok:
+                parts = tok.split(".")
+                if len(parts) == 3:
+                    payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+                    ident = payload.get("account_id") or payload.get("chatgpt_account_id") or payload.get("sub")
+        if ident:
+            digest = hashlib.sha256(str(ident).encode("utf-8")).hexdigest()
+            state_dir.mkdir(parents=True, exist_ok=True)
+            state_file = state_dir / "identity.sha256"
+            state_file.write_text(digest + "\n", encoding="ascii")
+    except Exception:
+        pass
+
+terminated = []
+self_pid = os.getpid()
+proc = pathlib.Path("/proc")
+if proc.exists():
+    for p in proc.iterdir():
+        if not p.name.isdigit():
+            continue
+        pid = int(p.name)
+        if pid == self_pid:
+            continue
+        try:
+            if p.stat().st_uid != uid:
+                continue
+            exe = os.readlink(p / "exe")
+            cmdline = (p / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "ignore")
+            is_codex = False
+            exe_name = pathlib.Path(exe).name
+            if exe_name in ("codex", "codex-code-mode-host"):
+                is_codex = True
+            elif "codex app-server" in cmdline or "codex/packages/standalone" in exe or "openai.chatgpt" in exe:
+                is_codex = True
+
+            if is_codex:
+                os.kill(pid, signal.SIGTERM)
+                terminated.append(pid)
+        except Exception:
+            continue
+
+    if terminated:
+        time.sleep(1.0)
+        for pid in terminated:
+            try:
+                os.kill(pid, 0)
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+daemon_status = "none"
+codex_bin = None
+for candidate in [
+    "codex",
+    str(pathlib.Path.home() / ".local/bin/codex"),
+    str(codex_home / "packages/standalone/current/bin/codex"),
+]:
+    try:
+        res = subprocess.run(["which", candidate] if candidate == "codex" else ["test", "-x", candidate], capture_output=True)
+        if res.returncode == 0:
+            codex_bin = candidate
+            break
+    except Exception:
+        pass
+
+if codex_bin:
+    try:
+        p = subprocess.run([codex_bin, "app-server", "daemon", "restart"], timeout=5, capture_output=True, text=True)
+        if p.returncode == 0:
+            daemon_status = "restarted"
+        else:
+            p2 = subprocess.run([codex_bin, "app-server", "daemon", "start"], timeout=5, capture_output=True, text=True)
+            daemon_status = "started" if p2.returncode == 0 else "failed"
+    except Exception as e:
+        daemon_status = f"error:{e}"
+
+print(f"linux-codex-restarted: terminated={len(terminated)}, daemon={daemon_status}")
+PY_EOF
+    exit 0
+  fi
+
+  # Linux 但无 python3 时的纯 shell 回退
+  pids="$(ps -u "$(id -u)" -o pid= -o args= 2>/dev/null | awk '
+/codex app-server/ || /codex.*code_mode_host/ || /openai\.chatgpt/ || /packages\/standalone\/.*codex/ { print $1 }
+' || true)"
+  pids="$(printf '%s\n' "$pids" | tr -s '[:space:]' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  if [ -n "$pids" ]; then
+    kill -TERM $pids 2>/dev/null || true
+    sleep 1
+    for pid in $pids; do
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+      fi
+    done
+  fi
+
+  codex_bin="codex"
+  if ! command -v codex >/dev/null 2>&1; then
+    if [ -x "$HOME/.local/bin/codex" ]; then
+      codex_bin="$HOME/.local/bin/codex"
+    elif [ -x "$codex_home/packages/standalone/current/bin/codex" ]; then
+      codex_bin="$codex_home/packages/standalone/current/bin/codex"
+    else
+      codex_bin=""
+    fi
+  fi
+
+  daemon_status="none"
+  if [ -n "$codex_bin" ]; then
+    if command -v timeout >/dev/null 2>&1; then
+      if timeout 5 "$codex_bin" app-server daemon restart >/dev/null 2>&1; then
+        daemon_status="restarted"
+      elif timeout 5 "$codex_bin" app-server daemon start >/dev/null 2>&1; then
+        daemon_status="started"
+      else
+        daemon_status="failed"
+      fi
+    else
+      if "$codex_bin" app-server daemon restart >/dev/null 2>&1; then
+        daemon_status="restarted"
+      elif "$codex_bin" app-server daemon start >/dev/null 2>&1; then
+        daemon_status="started"
+      else
+        daemon_status="failed"
+      fi
+    fi
+  fi
+  printf 'linux-codex-restarted: terminated=shell, daemon=%s\n' "$daemon_status"
+  exit 0
+fi
+
+# 3) 非 Linux 平台（如 macOS/BSD）优先 daemon restart，限制 5s
 if command -v codex >/dev/null 2>&1; then
   if command -v timeout >/dev/null 2>&1; then
     timeout 5 codex app-server daemon restart >/dev/null 2>&1
@@ -550,7 +711,7 @@ if command -v codex >/dev/null 2>&1; then
   fi
 fi
 
-# 2) 尝试结束仍在跑的 app-server（没有则直接成功）
+# 4) 非 Linux 下尝试结束仍在跑的 app-server（没有则直接成功）
 pids="$(ps -u "$(id -u)" -o pid= -o args= 2>/dev/null | awk '
 /codex app-server --listen/ || /codex app-server proxy/ { print $1 }
 ' || true)"
@@ -560,7 +721,6 @@ if [ -z "$pids" ]; then
   exit 0
 fi
 
-# shellcheck disable=SC2086
 kill -TERM $pids 2>/dev/null || true
 sleep 1
 for pid in $pids; do
@@ -577,26 +737,29 @@ async fn reload_remote_codex_app_server(server: &SshServer) -> Result<(), String
     let output = run_ssh(
         server,
         APP_SERVER_RELOAD_TIMEOUT_SECS,
-        &["sh", "-s"],
+        &["sh", "-s", "--", &server.codex_home],
         Some(reload_app_server_script().to_string()),
     )
     .await
     .map_err(|e| format!("ssh_remote_app_server_reload_failed: {}", sanitize_error(e)))?;
 
-    let status = output
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("");
-    if matches!(
-        status,
-        "daemon-restarted" | "app-server-terminated" | "no-app-server"
-    ) {
+    let recognized_status = output.lines().map(str::trim).find(|line| {
+        matches!(
+            *line,
+            "daemon-restarted" | "app-server-terminated" | "no-app-server"
+        ) || line.starts_with("linux-codex-restarted")
+    });
+
+    if let Some(status) = recognized_status {
+        logger::log_info(&format!(
+            "[Codex SSH] 远端 app-server 刷新成功: server_id={}, status={}",
+            server.id, status
+        ));
         Ok(())
     } else {
         Err(format!(
             "ssh_remote_app_server_reload_failed: unexpected reload response: {}",
-            sanitize_error(status)
+            sanitize_error(output.trim())
         ))
     }
 }
@@ -1290,6 +1453,9 @@ mod tests {
         assert!(script.contains("codex app-server proxy"));
         assert!(script.contains("no-app-server"));
         assert!(!script.contains("pkill"));
+        assert!(script.contains("os_platform="));
+        assert!(script.contains("linux-codex-restarted"));
+        assert!(script.contains("codex-auth-account-monitor"));
     }
 
     #[test]
@@ -1443,6 +1609,39 @@ mod tests {
         let result = sync_current_antigravity_account_to_server(Some(server.id.clone()))
             .await
             .expect("sync current antigravity account to server");
+
+        assert!(
+            result.verified,
+            "live SSH sync should verify remote hashes: {:?}",
+            result.error
+        );
+        assert_eq!(result.account_id, current.id);
+        assert_eq!(result.account_email, current.email);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_ssh_server_syncs_current_codex_account_real_store() {
+        let home = dirs::home_dir().expect("get home dir");
+        let real_cockpit_dir = home.join(".antigravity_cockpit");
+        std::env::set_var("COCKPIT_TOOLS_DATA_DIR", &real_cockpit_dir);
+
+        let current = codex_account::get_current_account()
+            .expect("read current codex account");
+        let store = load_store().expect("load store");
+        let server = store
+            .servers
+            .into_iter()
+            .find(|s| s.name == "server" || s.host == "server" || s.host == "pve-ubuntu.local")
+            .expect("ssh server named 'server' not found");
+
+        test_connection(&server.id)
+            .await
+            .expect("ssh connection test should pass");
+
+        let result = sync_current_account_to_server(Some(server.id.clone()))
+            .await
+            .expect("sync current codex account to server");
 
         assert!(
             result.verified,
