@@ -123,8 +123,50 @@ pub struct CreateQueuedTaskRequest {
     pub model: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ThreadExecutionStatus {
+    pub is_busy: bool,
+    pub latest_status: Option<String>,
+    pub error: Option<String>,
+}
+
 static QUEUE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static DISPATCH_RUNNING: OnceLock<Mutex<bool>> = OnceLock::new();
+static RECENTLY_RESUMED_THREADS: OnceLock<Mutex<std::collections::HashMap<String, i64>>> = OnceLock::new();
+
+fn recently_resumed_lock() -> &'static Mutex<std::collections::HashMap<String, i64>> {
+    RECENTLY_RESUMED_THREADS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn mark_recently_resumed(thread_id: &str) {
+    if let Ok(mut map) = recently_resumed_lock().lock() {
+        map.insert(thread_id.to_string(), Utc::now().timestamp());
+    }
+}
+
+fn is_recently_resumed(thread_id: &str) -> bool {
+    let now = Utc::now().timestamp();
+    if let Ok(mut map) = recently_resumed_lock().lock() {
+        if let Some(&ts) = map.get(thread_id) {
+            if now - ts < 15 {
+                return true;
+            } else {
+                map.remove(thread_id);
+            }
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
+fn is_pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_pid_alive(_pid: u32) -> bool {
+    false
+}
 
 fn queue_lock() -> &'static Mutex<()> {
     QUEUE_LOCK.get_or_init(|| Mutex::new(()))
@@ -642,6 +684,47 @@ def handle():
         conn.close()
         return {"threads": threads}
         
+    elif action == "check_thread_statuses":
+        t_ids = params.get("thread_ids", [])
+        hist_db = codex_home / "thread_history_1.sqlite"
+        goals_db = codex_home / "goals_1.sqlite"
+        res = {}
+        for tid in t_ids:
+            res[tid] = {"is_busy": False, "latest_status": None, "error": None}
+            
+        if hist_db.exists():
+            try:
+                conn_h = sqlite3.connect(f"file:{hist_db}?mode=ro", uri=True)
+                cur_h = conn_h.cursor()
+                for tid in t_ids:
+                    cur_h.execute("SELECT status, error_json FROM thread_turns WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1", (tid,))
+                    row = cur_h.fetchone()
+                    if row:
+                        st, err = row
+                        res[tid]["latest_status"] = st
+                        res[tid]["error"] = err
+                        if st == "inProgress":
+                            res[tid]["is_busy"] = True
+                conn_h.close()
+            except Exception:
+                pass
+
+        if goals_db.exists():
+            try:
+                conn_g = sqlite3.connect(f"file:{goals_db}?mode=ro", uri=True)
+                cur_g = conn_g.cursor()
+                for tid in t_ids:
+                    cur_g.execute("SELECT status FROM thread_goals WHERE thread_id = ? ORDER BY updated_at_ms DESC LIMIT 1", (tid,))
+                    row = cur_g.fetchone()
+                    if row and row[0] == "active":
+                        res[tid]["is_busy"] = True
+                conn_g.close()
+            except Exception:
+                pass
+                
+        conn.close()
+        return {"thread_statuses": res}
+
     conn.close()
     return {}
 
@@ -757,6 +840,58 @@ async fn list_ssh_threads(
     }
 
     Ok(threads)
+}
+
+async fn query_ssh_thread_statuses(
+    server_id: &str,
+    thread_ids: &[String],
+) -> Result<std::collections::HashMap<String, ThreadExecutionStatus>, String> {
+    if thread_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let server_list = ssh_server::list_servers()?;
+    let server = server_list
+        .servers
+        .into_iter()
+        .find(|s| s.id == server_id)
+        .ok_or_else(|| format!("未找到目标 SSH 服务器: {}", server_id))?;
+
+    let payload = serde_json::json!({
+        "action": "check_thread_statuses",
+        "thread_ids": thread_ids,
+        "codex_home": server.codex_home,
+    })
+    .to_string();
+    let b64_payload = BASE64_STANDARD.encode(payload.as_bytes());
+    let output = ssh_server::run_ssh(
+        &server,
+        15,
+        &["python3", "-", &b64_payload],
+        Some(PYTHON_SSH_DISCOVERY.to_string()),
+    )
+    .await?;
+
+    let start_tag = "__CODEX_QUEUE_JSON_START__";
+    let end_tag = "__CODEX_QUEUE_JSON_END__";
+    let (s_idx, e_idx) = (
+        output.find(start_tag).ok_or("未找到远端输出起始标记")? + start_tag.len(),
+        output.find(end_tag).ok_or("未找到远端输出结束标记")?,
+    );
+    let json_str = output[s_idx..e_idx].trim();
+    let val: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| format!("解析远端会话状态 JSON 失败: {}", e))?;
+
+    if let Some(err) = val.get("error").and_then(|v| v.as_str()) {
+        return Err(format!("远端状态查询失败: {}", err));
+    }
+
+    let statuses: std::collections::HashMap<String, ThreadExecutionStatus> = val
+        .get("thread_statuses")
+        .cloned()
+        .map(|v| serde_json::from_value(v).unwrap_or_default())
+        .unwrap_or_default();
+
+    Ok(statuses)
 }
 
 // ----------------- Execution & Dispatcher Engine -----------------
@@ -973,64 +1108,67 @@ print(json.dumps(res, ensure_ascii=False))
 print("__CODEX_QUEUE_EXEC_JSON_END__")
 "#;
 
-fn is_local_thread_busy(thread_id: &str) -> bool {
+fn query_local_thread_status(thread_id: &str) -> ThreadExecutionStatus {
+    let mut status = ThreadExecutionStatus::default();
     let codex_home = match std::env::var_os("CODEX_HOME") {
         Some(val) => PathBuf::from(val),
         None => match dirs::home_dir() {
             Some(home) => home.join(".codex"),
-            None => return false,
+            None => return status,
         },
     };
     let hist_db = codex_home.join("thread_history_1.sqlite");
-    if !hist_db.exists() {
-        return false;
-    }
-    let conn = rusqlite::Connection::open_with_flags(
-        &hist_db,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    );
-    if let Ok(conn) = conn {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT status FROM thread_turns WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1",
+    if hist_db.exists() {
+        if let Ok(conn) = rusqlite::Connection::open_with_flags(
+            &hist_db,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         ) {
-            if let Ok(status) = stmt.query_row([thread_id], |row| row.get::<_, String>(0)) {
-                return status == "inProgress";
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT status, error_json FROM thread_turns WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1",
+            ) {
+                if let Ok(res) = stmt.query_row([thread_id], |row| {
+                    let st: String = row.get(0)?;
+                    let err: Option<String> = row.get(1)?;
+                    Ok((st, err))
+                }) {
+                    status.latest_status = Some(res.0.clone());
+                    status.error = res.1;
+                    if res.0 == "inProgress" {
+                        status.is_busy = true;
+                    }
+                }
             }
         }
     }
-    false
+
+    let goals_db = codex_home.join("goals_1.sqlite");
+    if goals_db.exists() {
+        if let Ok(conn_g) = rusqlite::Connection::open_with_flags(
+            &goals_db,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            if let Ok(mut stmt) = conn_g.prepare(
+                "SELECT status FROM thread_goals WHERE thread_id = ? ORDER BY updated_at_ms DESC LIMIT 1",
+            ) {
+                if let Ok(g_status) = stmt.query_row([thread_id], |row| row.get::<_, String>(0)) {
+                    if g_status == "active" {
+                        status.is_busy = true;
+                    }
+                }
+            }
+        }
+    }
+
+    status
+}
+
+fn is_local_thread_busy(thread_id: &str) -> bool {
+    query_local_thread_status(thread_id).is_busy
 }
 
 fn check_local_turn_result(thread_id: &str) -> Option<(String, Option<String>)> {
-    let codex_home = match std::env::var_os("CODEX_HOME") {
-        Some(val) => PathBuf::from(val),
-        None => match dirs::home_dir() {
-            Some(home) => home.join(".codex"),
-            None => return None,
-        },
-    };
-    let hist_db = codex_home.join("thread_history_1.sqlite");
-    if !hist_db.exists() {
-        return None;
-    }
-    let conn = rusqlite::Connection::open_with_flags(
-        &hist_db,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    );
-    if let Ok(conn) = conn {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT status, error_json FROM thread_turns WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1",
-        ) {
-            if let Ok(res) = stmt.query_row([thread_id], |row| {
-                let status: String = row.get(0)?;
-                let err: Option<String> = row.get(1)?;
-                Ok((status, err))
-            }) {
-                return Some(res);
-            }
-        }
-    }
-    None
+    let status = query_local_thread_status(thread_id);
+    status.latest_status.map(|st| (st, status.error))
 }
 
 fn find_latest_created_thread(cwd: &str) -> Option<String> {
@@ -1301,6 +1439,31 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
     let now_ts = Utc::now().timestamp();
     let mut updated = false;
 
+    // Fetch all current interrupted tasks across local & SSH
+    let interrupted_tasks = codex_auto_resume::detect_all_interrupted_tasks().await;
+
+    // Collect all SSH thread_ids to query by server_id
+    let mut ssh_threads_to_query: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for t in &tasks {
+        if t.source == "ssh" {
+            if let Some(ref sid) = t.server_id {
+                if let Some(tid) = t.thread_id.as_deref().or(t.assigned_thread_id.as_deref()) {
+                    let list = ssh_threads_to_query.entry(sid.clone()).or_default();
+                    if !list.contains(&tid.to_string()) {
+                        list.push(tid.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut ssh_thread_statuses: std::collections::HashMap<String, std::collections::HashMap<String, ThreadExecutionStatus>> = std::collections::HashMap::new();
+    for (sid, tids) in ssh_threads_to_query {
+        if let Ok(statuses) = query_ssh_thread_statuses(&sid, &tids).await {
+            ssh_thread_statuses.insert(sid, statuses);
+        }
+    }
+
     // 1. Check all currently RUNNING tasks for completion
     for task in tasks.iter_mut() {
         if task.status != TaskStatus::Running {
@@ -1313,12 +1476,16 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
             .or(task.assigned_thread_id.as_deref());
 
         if task.source == "local" {
-            // Check if turn finished
             if let Some(t_id) = effective_thread_id {
-                let is_busy = is_local_thread_busy(t_id);
-                if !is_busy {
-                    // Turn has concluded! Check result
-                    if let Some((turn_status, error_json)) = check_local_turn_result(t_id) {
+                if interrupted_tasks.iter().any(|it| it.thread_id == t_id && it.server_id.is_none()) {
+                    task.status = TaskStatus::WaitingInterrupted;
+                    task.error_message = Some("本地任务受限中断，等待自动恢复并执行完成...".to_string());
+                    updated = true;
+                    continue;
+                }
+                let status = query_local_thread_status(t_id);
+                if !status.is_busy {
+                    if let Some(ref turn_status) = status.latest_status {
                         if turn_status == "completed" {
                             task.status = TaskStatus::Completed;
                             task.completed_at = Some(now_ts);
@@ -1331,30 +1498,31 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
                         } else if turn_status == "failed" {
                             task.status = TaskStatus::Failed;
                             task.completed_at = Some(now_ts);
-                            task.error_message = error_json.or(Some("任务执行失败".to_string()));
+                            task.error_message = status.error.or(Some("任务执行失败".to_string()));
                             updated = true;
                         }
-                    } else {
-                        // Check if at least 15 seconds have elapsed and PID is no longer running
-                        if let Some(started) = task.started_at {
-                            if now_ts - started > 15 {
-                                task.status = TaskStatus::Completed;
-                                task.completed_at = Some(now_ts);
-                                updated = true;
-                            }
+                    } else if let Some(started) = task.started_at {
+                        if now_ts - started > 30 && task.pid.map(|p| !is_pid_alive(p)).unwrap_or(true) {
+                            task.status = TaskStatus::Completed;
+                            task.completed_at = Some(now_ts);
+                            updated = true;
                         }
                     }
                 }
             } else {
-                // For new threads created locally where we didn't know thread_id upfront:
                 if let Some(created_id) = find_latest_created_thread(&task.cwd) {
                     task.assigned_thread_id = Some(created_id.clone());
-                    let is_busy = is_local_thread_busy(&created_id);
-                    if !is_busy {
-                        if let Some((turn_status, _)) = check_local_turn_result(&created_id) {
+                    let status = query_local_thread_status(&created_id);
+                    if !status.is_busy {
+                        if let Some(ref turn_status) = status.latest_status {
                             if turn_status == "completed" {
                                 task.status = TaskStatus::Completed;
                                 task.completed_at = Some(now_ts);
+                                updated = true;
+                            } else if turn_status == "failed" {
+                                task.status = TaskStatus::Failed;
+                                task.completed_at = Some(now_ts);
+                                task.error_message = status.error.or(Some("任务执行失败".to_string()));
                                 updated = true;
                             }
                         }
@@ -1362,28 +1530,51 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
                 }
             }
         } else if task.source == "ssh" {
-            // For SSH, check elapsed time or remote status
-            if let Some(started) = task.started_at {
+            if let Some(t_id) = effective_thread_id {
                 if let Some(ref server_id) = task.server_id {
-                    if let Ok(server_list) = ssh_server::list_servers() {
-                        if let Some(server) = server_list.servers.iter().find(|s| s.id == *server_id) {
-                            // Check if interrupted tasks appeared on remote
-                            if let Ok(interrupted) = codex_auto_resume::detect_remote_tasks(server).await {
-                                if let Some(t_id) = effective_thread_id {
-                                    if interrupted.iter().any(|it| it.thread_id == t_id) {
-                                        task.status = TaskStatus::WaitingInterrupted;
-                                        task.error_message = Some("远端任务受限中断，等待自动恢复".to_string());
-                                        updated = true;
-                                        continue;
-                                    }
+                    // Check if interrupted tasks appeared on remote
+                    if interrupted_tasks.iter().any(|it| it.thread_id == t_id && it.server_id.as_deref() == Some(server_id)) {
+                        task.status = TaskStatus::WaitingInterrupted;
+                        task.error_message = Some("远端任务受限中断，等待自动恢复并执行完成...".to_string());
+                        updated = true;
+                        continue;
+                    }
+
+                    if let Some(status_map) = ssh_thread_statuses.get(server_id) {
+                        if let Some(status) = status_map.get(t_id) {
+                            if status.is_busy {
+                                // Remote turn is still generating / actively executing
+                                continue;
+                            }
+                            if let Some(ref turn_status) = status.latest_status {
+                                if turn_status == "completed" {
+                                    task.status = TaskStatus::Completed;
+                                    task.completed_at = Some(now_ts);
+                                    task.error_message = None;
+                                    updated = true;
+                                    logger::log_info(&format!(
+                                        "[CodexTaskQueue] SSH 远端任务执行完成: id={}, thread_id={}",
+                                        task.id, t_id
+                                    ));
+                                    continue;
+                                } else if turn_status == "failed" {
+                                    task.status = TaskStatus::Failed;
+                                    task.completed_at = Some(now_ts);
+                                    task.error_message = status.error.clone().or(Some("远端任务执行失败".to_string()));
+                                    updated = true;
+                                    continue;
                                 }
                             }
+                            // Status is tracked for this thread; do not fallback to arbitrary timeout
+                            continue;
                         }
                     }
                 }
+            }
 
-                // If started over 25 seconds ago and PID check passes, mark completed
-                if now_ts - started > 30 {
+            // Fallback for SSH when status is unknown: only complete after at least 60 seconds
+            if let Some(started) = task.started_at {
+                if now_ts - started > 60 {
                     task.status = TaskStatus::Completed;
                     task.completed_at = Some(now_ts);
                     updated = true;
@@ -1392,10 +1583,7 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
         }
     }
 
-    // 2. Fetch all current interrupted tasks across local & SSH
-    let interrupted_tasks = codex_auto_resume::detect_all_interrupted_tasks().await;
-
-    // 3. Count currently running tasks
+    // 2. Count currently running tasks
     let running_count = tasks.iter().filter(|t| t.status == TaskStatus::Running).count();
     let max_allowed = if config.concurrency_mode == "sequential" {
         1
@@ -1431,15 +1619,40 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
             .clone()
             .or_else(|| tasks[idx].assigned_thread_id.clone());
 
+        // Helper to check if this thread is currently busy in Codex
+        let thread_is_busy = if let Some(ref tid) = target_thread_id {
+            if is_recently_resumed(tid) {
+                true
+            } else if tasks[idx].source == "local" {
+                query_local_thread_status(tid).is_busy
+            } else if tasks[idx].source == "ssh" {
+                let server_id = tasks[idx].server_id.as_deref().unwrap_or("");
+                ssh_thread_statuses
+                    .get(server_id)
+                    .and_then(|m| m.get(tid))
+                    .map(|s| s.is_busy)
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         // RULE 2: Same thread must execute SEQUENTIALLY
         if let Some(ref tid) = target_thread_id {
             let key = (tasks[idx].source.clone(), tasks[idx].server_id.clone(), tid.clone());
             if busy_threads.contains(&key) {
-                // Another task is already executing in this same thread -> hold this task!
+                // Another task in the queue is already running in this thread -> hold this task!
                 continue;
             }
-            if tasks[idx].source == "local" && is_local_thread_busy(tid) {
-                // Local thread is actively generating or in progress -> wait!
+            if thread_is_busy {
+                // Thread is actively generating/busy -> hold this task!
+                if tasks[idx].status == TaskStatus::WaitingInterrupted {
+                    tasks[idx].error_message =
+                        Some("当前会话正在执行中断恢复任务，等待其执行完成...".to_string());
+                    updated = true;
+                }
                 continue;
             }
         }
@@ -1479,22 +1692,40 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
                         "[CodexTaskQueue] 排队任务依赖的中断任务已满足恢复条件，优先启动恢复: thread_id={}",
                         tid
                     ));
+                    mark_recently_resumed(tid);
                     let _ = codex_auto_resume::resume_task(
                         interrupted,
                         None,
                         "queue_priority_auto",
                     )
                     .await;
+                    tasks[idx].error_message =
+                        Some("当前会话正在执行中断恢复任务，等待其执行完成...".to_string());
+                    updated = true;
                 }
 
                 // Must wait for this interrupted task to finish!
                 continue;
             } else {
-                // If previously was waiting_interrupted, but interrupted task is no longer present:
-                if tasks[idx].status == TaskStatus::WaitingInterrupted {
+                // If previously was waiting_interrupted, but interrupted task is no longer reported in detect_all_interrupted_tasks:
+                if thread_is_busy {
+                    // Resumed task is actively running! Keep waiting!
+                    if tasks[idx].status != TaskStatus::WaitingInterrupted {
+                        tasks[idx].status = TaskStatus::WaitingInterrupted;
+                    }
+                    tasks[idx].error_message =
+                        Some("当前会话正在执行中断恢复任务，等待其执行完成...".to_string());
+                    updated = true;
+                    continue;
+                } else if tasks[idx].status == TaskStatus::WaitingInterrupted {
+                    // Interrupted task has FULLY concluded and thread is idle!
                     tasks[idx].status = TaskStatus::Pending;
                     tasks[idx].error_message = None;
                     updated = true;
+                    logger::log_info(&format!(
+                        "[CodexTaskQueue] 中断任务已完全执行完成，会话已空闲，排队任务转为准备派发: id={}, thread_id={}",
+                        tasks[idx].id, tid
+                    ));
                 }
             }
         }
@@ -1526,6 +1757,7 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
                 tasks[idx] = task_to_launch;
                 if let Some(tid) = tasks[idx].thread_id.as_deref().or(tasks[idx].assigned_thread_id.as_deref()) {
                     busy_threads.insert((tasks[idx].source.clone(), tasks[idx].server_id.clone(), tid.to_string()));
+                    mark_recently_resumed(tid);
                 }
                 current_running += 1;
                 updated = true;
