@@ -666,8 +666,14 @@ fn find_local_ls_port() -> Option<u16> {
         if let Ok(out) = cmd.output() {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let stderr = String::from_utf8_lossy(&out.stderr);
-            // If it connected (even if conversation not found, it won't say 'ANTIGRAVITY_LS_ADDRESS is not set')
-            if !stdout.contains("ANTIGRAVITY_LS_ADDRESS is not set") && !stderr.contains("ANTIGRAVITY_LS_ADDRESS is not set") {
+            let combined = format!("{} {}", stdout, stderr);
+            let is_conn_err = combined.contains("connection error")
+                || combined.contains("connection reset")
+                || combined.contains("read: connection reset by peer")
+                || combined.contains("error reading server preface")
+                || combined.contains("Unavailable")
+                || combined.contains("ANTIGRAVITY_LS_ADDRESS is not set");
+            if !is_conn_err && (combined.contains("trajectory not found") || combined.contains("conversationMetadata") || combined.contains("error ID:")) {
                 return Some(port);
             }
         }
@@ -747,10 +753,7 @@ async fn resume_local_task(thread_id: &str, prompt: &str) -> Result<ResumeTaskRe
         let _ = std::process::Command::new("open").arg(&url).spawn();
         let _ = std::process::Command::new("open").arg("-a").arg("Antigravity").spawn();
 
-        return Ok(ResumeTaskResult {
-            success: true,
-            message: format!("已唤醒 Antigravity 应用并定位到会话: {}", thread_id),
-        });
+        return Err(format!("已唤醒 Antigravity 窗口并定位到会话，但未能通过 API 自动注入继续指令，请在会话中手动继续: {}", thread_id));
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1043,5 +1046,21 @@ mod tests {
                 println!("Found tasks count: {}", tasks.len());
             }
         }
+    }
+
+    #[test]
+    fn test_find_local_ls_port() {
+        let port = find_local_ls_port();
+        println!("find_local_ls_port result: {:?}", port);
+        if let Some(p) = port {
+            assert!(p > 1024);
+        }
+    }
+
+    #[test]
+    fn test_ensure_antigravity_launch_path() {
+        let result = crate::modules::process::ensure_antigravity_launch_path_configured();
+        println!("ensure_antigravity_launch_path_configured: {:?}", result);
+        assert!(result.is_ok());
     }
 }

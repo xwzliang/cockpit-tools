@@ -580,7 +580,9 @@ fn collect_antigravity_process_entries_from_ps() -> Vec<(u32, Option<String>)> {
             Err(_) => continue,
         };
         let lower = cmdline.to_lowercase();
-        if !lower.contains(ANTIGRAVITY_APP_CONTENTS_MARKER) {
+        if !lower.contains(ANTIGRAVITY_APP_CONTENTS_MARKER)
+            && !lower.contains(ANTIGRAVITY_LEGACY_APP_CONTENTS_MARKER)
+        {
             continue;
         }
         if lower.contains("antigravity tools.app/contents/")
@@ -3409,14 +3411,16 @@ pub fn focus_process_pid(pid: u32) -> Result<u32, String> {
 #[cfg(target_os = "macos")]
 fn collect_antigravity_process_entries_macos() -> Vec<(u32, Option<String>)> {
     let mut pids = Vec::new();
-    if let Ok(output) = Command::new("pgrep")
-        .args(["-f", ANTIGRAVITY_APP_PATH])
-        .output()
-    {
-        if output.status.success() {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                if let Ok(pid) = line.trim().parse::<u32>() {
-                    pids.push(pid);
+    for path_candidate in [ANTIGRAVITY_APP_PATH, ANTIGRAVITY_LEGACY_APP_PATH] {
+        if let Ok(output) = Command::new("pgrep")
+            .args(["-f", path_candidate])
+            .output()
+        {
+            if output.status.success() {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    if let Ok(pid) = line.trim().parse::<u32>() {
+                        pids.push(pid);
+                    }
                 }
             }
         }
@@ -3447,7 +3451,10 @@ fn collect_antigravity_process_entries_macos() -> Vec<(u32, Option<String>)> {
             if cmdline.is_empty() {
                 continue;
             }
-            if !cmdline.to_lowercase().contains(ANTIGRAVITY_APP_EXEC_MARKER) {
+            let lower = cmdline.to_lowercase();
+            if !lower.contains(ANTIGRAVITY_APP_EXEC_MARKER)
+                && !lower.contains(ANTIGRAVITY_LEGACY_APP_CONTENTS_MARKER)
+            {
                 continue;
             }
             let dir = extract_user_data_dir_from_command_line(cmdline);

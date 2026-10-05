@@ -539,7 +539,9 @@ fn find_antigravity_process_exe() -> Option<std::path::PathBuf> {
             let _pid_str = parts.next().unwrap_or("").trim();
             let cmdline = parts.next().unwrap_or("").trim();
             let lower = cmdline.to_lowercase();
-            if !lower.contains(ANTIGRAVITY_APP_CONTENTS_MARKER) {
+            if !lower.contains(ANTIGRAVITY_APP_CONTENTS_MARKER)
+                && !lower.contains(ANTIGRAVITY_LEGACY_APP_CONTENTS_MARKER)
+            {
                 continue;
             }
             if lower.contains("antigravity tools.app/contents/") {
@@ -1091,9 +1093,15 @@ pub fn detect_antigravity_exec_path() -> Option<std::path::PathBuf> {
 
     #[cfg(target_os = "macos")]
     {
-        let path = std::path::PathBuf::from(ANTIGRAVITY_APP_PATH);
-        if path.exists() {
-            return Some(path);
+        for candidate in [
+            ANTIGRAVITY_APP_PATH,
+            ANTIGRAVITY_LEGACY_APP_PATH,
+            "/Applications/Antigravity.app/Contents/MacOS/Electron",
+        ] {
+            let path = std::path::PathBuf::from(candidate);
+            if path.exists() {
+                return Some(path);
+            }
         }
     }
 
@@ -3024,7 +3032,7 @@ fn resolve_antigravity_launch_path() -> Result<std::path::PathBuf, String> {
     if let Some(custom) = normalize_custom_path(Some(&configured_path)) {
         #[cfg(target_os = "macos")]
         if is_legacy_antigravity_macos_path(&custom) {
-            if let Some(detected) = detect_antigravity_exec_path() {
+            if let Some(detected) = detect_antigravity_exec_path().or_else(detect_antigravity_legacy_exec_path) {
                 update_app_path_in_config("antigravity", &detected, &configured_path);
                 return Ok(detected);
             }
@@ -3059,14 +3067,14 @@ fn resolve_antigravity_launch_path() -> Result<std::path::PathBuf, String> {
             }
         }
 
-        if let Some(detected) = detect_antigravity_exec_path() {
+        if let Some(detected) = detect_antigravity_exec_path().or_else(detect_antigravity_legacy_exec_path) {
             update_app_path_in_config("antigravity", &detected, &configured_path);
             return Ok(detected);
         }
         return Err(app_path_missing_error("antigravity"));
     }
 
-    if let Some(detected) = detect_antigravity_exec_path() {
+    if let Some(detected) = detect_antigravity_exec_path().or_else(detect_antigravity_legacy_exec_path) {
         update_app_path_in_config("antigravity", &detected, &configured_path);
         return Ok(detected);
     }
@@ -3518,7 +3526,7 @@ fn detect_and_save_app_path_raw(app: &str, force: bool) -> Option<String> {
             if !force && !current.antigravity_app_path.trim().is_empty() {
                 return Some(current.antigravity_app_path);
             }
-            if let Some(detected) = detect_antigravity_exec_path() {
+            if let Some(detected) = detect_antigravity_exec_path().or_else(detect_antigravity_legacy_exec_path) {
                 update_app_path_in_config("antigravity", &detected, &current.antigravity_app_path);
                 return Some(config::get_user_config().antigravity_app_path);
             }
