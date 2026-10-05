@@ -7,6 +7,7 @@ INSTALL_DIR="${INSTALL_DIR:-/Applications}"
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 SKIP_INSTALL="${SKIP_INSTALL:-0}"
 AUTO_INSTALL_DEPS="${AUTO_INSTALL_DEPS:-1}"
+LAUNCH_APP="${LAUNCH_APP:-1}"
 
 log() {
   printf '\n==> %s\n' "$*"
@@ -262,4 +263,9 @@ if [[ "$SELECTED_IDENTITY" == "-" ]]; then
   printf 'It does not use TestFlight and has no TestFlight expiration.\n'
 else
   printf 'Developer ID signing was used. Notarization is not performed by this script.\n'
+fi
+
+if [[ "$LAUNCH_APP" == "1" ]]; then
+  log "Launching application: $DEST"
+  open "$DEST"
 fi

@@ -516,7 +516,7 @@ export function CodexAutoResumeSection({
       {!isCollapsed && (
         <div className="codex-auto-resume-body">
           {loading && interruptedTasks.length === 0 && resumedTasks.length === 0 ? (
-            <div className="codex-auto-resume-empty">
+            <div key="loading" className="codex-auto-resume-empty">
               <RefreshCw size={24} className="spin codex-auto-resume-empty-icon" />
               <div className="codex-auto-resume-empty-title">
                 {t('codex.autoResume.scanning', '正在扫描本地及远程 SSH 服务器的中断任务...')}
@@ -524,7 +524,7 @@ export function CodexAutoResumeSection({
             </div>
           ) : activeTab === 'interrupted' ? (
             interruptedTasks.length === 0 ? (
-              <div className="codex-auto-resume-empty">
+              <div key="interrupted-empty" className="codex-auto-resume-empty">
                 <CheckCircle size={28} className="codex-auto-resume-empty-icon" />
                 <div className="codex-auto-resume-empty-title">
                   {t('codex.autoResume.emptyTitle', '当前无受限中断的任务')}
@@ -537,13 +537,13 @@ export function CodexAutoResumeSection({
                 </div>
               </div>
             ) : (
-              interruptedTasks.map((task) => {
+              interruptedTasks.map((task, index) => {
                 const countdown = !task.can_resume ? formatCountdown(task.resets_at) : null;
                 const resetTimeStr = formatResetTime(task.resets_at);
                 const isResuming = resumingTaskId === task.id;
 
                 return (
-                  <div key={task.id} className="codex-task-card">
+                  <div key={`${task.id}-${index}`} className="codex-task-card">
                     <div className="codex-task-card__header">
                       <div className="codex-task-card__tags">
                         {task.source === 'local' ? (
@@ -696,7 +696,7 @@ export function CodexAutoResumeSection({
           ) : (
             // Resumed history tab
             resumedTasks.length === 0 ? (
-              <div className="codex-auto-resume-empty">
+              <div key="resumed-empty" className="codex-auto-resume-empty">
                 <CheckCircle size={28} className="codex-auto-resume-empty-icon" />
                 <div className="codex-auto-resume-empty-title">
                   {t('codex.autoResume.emptyResumed', '暂无自动恢复记录')}
@@ -709,9 +709,9 @@ export function CodexAutoResumeSection({
                 </div>
               </div>
             ) : (
-              <div className="codex-resumed-history-list">
-                {resumedTasks.map((record) => (
-                  <div key={record.id} className="codex-resumed-item">
+              <div key="resumed-list" className="codex-resumed-history-list">
+                {resumedTasks.map((record, index) => (
+                  <div key={`${record.id}-${record.resumed_at}-${index}`} className="codex-resumed-item">
                     <div className="codex-resumed-item-top">
                       <div className="codex-task-card__tags">
                         {record.source === 'local' ? (

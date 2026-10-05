@@ -481,7 +481,7 @@ export function AntigravityAutoResumeSection({
       {!isCollapsed && (
         <div className="antigravity-auto-resume-body">
           {loading && interruptedTasks.length === 0 && resumedTasks.length === 0 ? (
-            <div className="antigravity-auto-resume-empty">
+            <div key="loading" className="antigravity-auto-resume-empty">
               <RefreshCw size={24} className="spin antigravity-auto-resume-empty-icon" />
               <div className="antigravity-auto-resume-empty-title">
                 {t('antigravity.autoResume.scanning', '正在扫描本地及远程 SSH 服务器的中断任务...')}
@@ -489,7 +489,7 @@ export function AntigravityAutoResumeSection({
             </div>
           ) : activeTab === 'interrupted' ? (
             interruptedTasks.length === 0 ? (
-              <div className="antigravity-auto-resume-empty">
+              <div key="interrupted-empty" className="antigravity-auto-resume-empty">
                 <CheckCircle size={28} className="antigravity-auto-resume-empty-icon" />
                 <div className="antigravity-auto-resume-empty-title">
                   {t('antigravity.autoResume.emptyTitle', '当前无受限中断的任务')}
@@ -502,13 +502,13 @@ export function AntigravityAutoResumeSection({
                 </div>
               </div>
             ) : (
-              interruptedTasks.map((task) => {
+              interruptedTasks.map((task, index) => {
                 const countdown = !task.can_resume ? formatCountdown(task.resets_at) : null;
                 const resetTimeStr = formatResetTime(task.resets_at);
                 const isResuming = resumingTaskId === task.id;
 
                 return (
-                  <div key={task.id} className="antigravity-task-card">
+                  <div key={`${task.id}-${index}`} className="antigravity-task-card">
                     <div className="antigravity-task-card__header">
                       <div className="antigravity-task-card__tags">
                         {task.source === 'local' ? (
@@ -658,7 +658,7 @@ export function AntigravityAutoResumeSection({
               })
             )
           ) : resumedTasks.length === 0 ? (
-            <div className="antigravity-auto-resume-empty">
+            <div key="resumed-empty" className="antigravity-auto-resume-empty">
               <CheckCircle size={28} className="antigravity-auto-resume-empty-icon" />
               <div className="antigravity-auto-resume-empty-title">
                 {t('antigravity.autoResume.noResumedTasks', '暂无恢复历史记录')}
@@ -671,9 +671,9 @@ export function AntigravityAutoResumeSection({
               </div>
             </div>
           ) : (
-            <div className="antigravity-resumed-history-list">
-              {resumedTasks.map((rec) => (
-                <div key={`${rec.id}-${rec.resumed_at}`} className="antigravity-resumed-item">
+            <div key="resumed-list" className="antigravity-resumed-history-list">
+              {resumedTasks.map((rec, index) => (
+                <div key={`${rec.id}-${rec.resumed_at}-${index}`} className="antigravity-resumed-item">
                   <div className="antigravity-resumed-item-top">
                     <div className="antigravity-task-card__tags">
                       {rec.source === 'local' ? (
