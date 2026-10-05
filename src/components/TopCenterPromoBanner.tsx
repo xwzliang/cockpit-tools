@@ -15,7 +15,12 @@ const PROMO_ROTATION_INTERVAL_MS = 6000;
 export function TopCenterPromoBanner({ reserveWhenEmpty = true, ads: adsOverride }: TopCenterPromoBannerProps) {
   const { t } = useTranslation();
   const storeAds = useTopRightAdStore((state) => state.state.ads);
-  const ads = adsOverride ?? storeAds;
+  const ads = (adsOverride ?? storeAds).filter(
+    (item) =>
+      item.id !== 'top-right-ad-2026-04-shop' &&
+      !item.text?.includes('GPT Plus 30天成品号') &&
+      !item.ctaUrl?.includes('xiangzili.xyz'),
+  );
   const [activeIndex, setActiveIndex] = useState(0);
   const [paused, setPaused] = useState(false);
 

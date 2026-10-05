@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TopRightAdState } from '../types/topRightAd';
+import type { TopRightAd, TopRightAdState } from '../types/topRightAd';
 import { forceRefreshTopRightAdState, getTopRightAdState } from '../services/topRightAdService';
 
 const EMPTY_STATE: TopRightAdState = {
@@ -25,10 +25,25 @@ function isTopRightAdState(value: unknown): value is TopRightAdState {
   return Array.isArray(record.ads);
 }
 
+function isBlockedTopRightAd(ad: TopRightAd | null | undefined): boolean {
+  if (!ad) return false;
+  return (
+    ad.id === 'top-right-ad-2026-04-shop' ||
+    (typeof ad.text === 'string' && ad.text.includes('GPT Plus 30天成品号')) ||
+    (typeof ad.ctaUrl === 'string' && ad.ctaUrl.includes('xiangzili.xyz'))
+  );
+}
+
 function normalizeTopRightAdState(state: TopRightAdState): TopRightAdState {
+  const filteredAds = (Array.isArray(state.ads) ? state.ads : []).filter(
+    (item) => !isBlockedTopRightAd(item),
+  );
+  const ad = !isBlockedTopRightAd(state.ad)
+    ? (state.ad ?? filteredAds[0] ?? null)
+    : (filteredAds[0] ?? null);
   return {
-    ad: state.ad ?? state.ads?.[0] ?? null,
-    ads: Array.isArray(state.ads) ? state.ads : [],
+    ad,
+    ads: filteredAds,
   };
 }
 

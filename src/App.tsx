@@ -292,6 +292,14 @@ function resolveTopPromoDisplayMode(ad: TopRightAd): string {
 }
 
 function isTopPromoAdVisibleOnPage(ad: TopRightAd, page: Page): boolean {
+  if (
+    ad.id === 'top-right-ad-2026-04-shop' ||
+    (typeof ad.text === 'string' && ad.text.includes('GPT Plus 30天成品号')) ||
+    (typeof ad.ctaUrl === 'string' && ad.ctaUrl.includes('xiangzili.xyz'))
+  ) {
+    return false;
+  }
+
   const pageTargets = new Set([normalizePromoTarget(page)]);
   const platformTargets = new Set(
     (TOP_PROMO_PAGE_PLATFORM_TARGETS[page] ?? []).map((value) => normalizePromoTarget(value)),

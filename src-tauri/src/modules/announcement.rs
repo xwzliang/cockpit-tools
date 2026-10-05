@@ -762,6 +762,12 @@ fn filter_top_right_ad_item(
     if !item.enabled {
         return None;
     }
+    if item.id == "top-right-ad-2026-04-shop"
+        || item.text.contains("GPT Plus 30天成品号")
+        || item.cta_url.as_deref().unwrap_or("").contains("xiangzili.xyz")
+    {
+        return None;
+    }
     if item.relay_related && !api_relay_enabled {
         return None;
     }

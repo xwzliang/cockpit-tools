@@ -556,6 +556,12 @@ fn filter_top_right_ad_item(
     current_version: &str,
     locale: &str,
 ) -> Option<TopRightAd> {
+    if item.id == "top-right-ad-2026-04-shop"
+        || item.text.contains("GPT Plus 30天成品号")
+        || item.cta_url.as_deref().unwrap_or("").contains("xiangzili.xyz")
+    {
+        return None;
+    }
     let target_versions = if item.target_versions.trim().is_empty() {
         "*"
     } else {
