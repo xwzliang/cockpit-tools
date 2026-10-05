@@ -199,6 +199,30 @@ pub fn get_queue_state() -> Result<CodexQueueState, String> {
     Ok(CodexQueueState { tasks, config })
 }
 
+pub fn get_local_thread_model(thread_id: &str) -> Option<String> {
+    let codex_home = match std::env::var_os("CODEX_HOME") {
+        Some(val) => PathBuf::from(val),
+        None => match dirs::home_dir() {
+            Some(home) => home.join(".codex"),
+            None => return None,
+        },
+    };
+    let state_db = codex_home.join("state_5.sqlite");
+    if !state_db.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &state_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let mut stmt = conn
+        .prepare("SELECT model FROM threads WHERE id = ? LIMIT 1")
+        .ok()?;
+    let res: Result<Option<String>, _> = stmt.query_row([thread_id], |row| row.get(0));
+    res.ok().flatten().filter(|m| !m.trim().is_empty())
+}
+
 pub fn add_task(req: CreateQueuedTaskRequest) -> Result<CodexQueuedTask, String> {
     let _guard = queue_lock().lock().unwrap();
     let mut tasks = load_tasks();
@@ -216,6 +240,18 @@ pub fn add_task(req: CreateQueuedTaskRequest) -> Result<CodexQueuedTask, String>
         }
     });
 
+    let mut model = req.model.clone();
+    if (model.is_none() || model.as_ref().map(|m| m.trim().is_empty()).unwrap_or(false))
+        && req.thread_id.is_some()
+        && req.source == "local"
+    {
+        if let Some(ref tid) = req.thread_id {
+            if let Some(inherited) = get_local_thread_model(tid) {
+                model = Some(inherited);
+            }
+        }
+    }
+
     let task = CodexQueuedTask {
         id,
         title,
@@ -226,7 +262,7 @@ pub fn add_task(req: CreateQueuedTaskRequest) -> Result<CodexQueuedTask, String>
         cwd: req.cwd,
         thread_id: req.thread_id,
         thread_title: req.thread_title,
-        model: req.model,
+        model,
         status: TaskStatus::Pending,
         error_message: None,
         output_preview: None,
@@ -382,6 +418,9 @@ fn list_local_projects() -> Result<Vec<CodexProjectItem>, String> {
             "SELECT cwd, MAX(updated_at) as last_active, COUNT(id) as cnt \
              FROM threads \
              WHERE cwd IS NOT NULL AND cwd != '' AND archived = 0 \
+               AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation')) \
+               AND (source IS NULL OR (source NOT LIKE '%\"subagent\"%' AND source NOT LIKE '%\"guardian\"%')) \
+               AND (title IS NULL OR (title != 'Guardian review' AND title NOT LIKE '%Guardian review%')) \
              GROUP BY cwd \
              ORDER BY last_active DESC \
              LIMIT 50",
@@ -439,12 +478,18 @@ async fn list_local_threads(cwd: Option<&str>) -> Result<Vec<CodexThreadSummary>
         "SELECT id, title, model, cwd, updated_at \
          FROM threads \
          WHERE archived = 0 AND cwd = ?1 \
+           AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation')) \
+           AND (source IS NULL OR (source NOT LIKE '%\"subagent\"%' AND source NOT LIKE '%\"guardian\"%')) \
+           AND (title IS NULL OR (title != 'Guardian review' AND title NOT LIKE '%Guardian review%')) \
          ORDER BY updated_at DESC \
          LIMIT 50"
     } else {
         "SELECT id, title, model, cwd, updated_at \
          FROM threads \
          WHERE archived = 0 \
+           AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation')) \
+           AND (source IS NULL OR (source NOT LIKE '%\"subagent\"%' AND source NOT LIKE '%\"guardian\"%')) \
+           AND (title IS NULL OR (title != 'Guardian review' AND title NOT LIKE '%Guardian review%')) \
          ORDER BY updated_at DESC \
          LIMIT 50"
     };
@@ -506,16 +551,26 @@ async fn list_local_threads(cwd: Option<&str>) -> Result<Vec<CodexThreadSummary>
 }
 
 const PYTHON_SSH_DISCOVERY: &str = r#"
-import sys, json, os, sqlite3
+import sys, json, os, sqlite3, base64
 from pathlib import Path
 
 def handle():
     raw = sys.argv[1] if len(sys.argv) > 1 else "{}"
+    try:
+        raw = base64.b64decode(raw).decode("utf-8")
+    except Exception:
+        pass
     params = json.loads(raw)
     action = params.get("action", "list_projects")
     
+    codex_home_param = params.get("codex_home")
     codex_home_env = os.environ.get("CODEX_HOME")
-    codex_home = Path(codex_home_env) if codex_home_env else (Path.home() / ".codex")
+    if codex_home_param:
+        codex_home = Path(codex_home_param).expanduser()
+    elif codex_home_env:
+        codex_home = Path(codex_home_env).expanduser()
+    else:
+        codex_home = Path.home() / ".codex"
     state_db = codex_home / "state_5.sqlite"
     
     if not state_db.exists():
@@ -529,6 +584,9 @@ def handle():
             SELECT cwd, MAX(updated_at) as last_active, COUNT(id) as cnt
             FROM threads
             WHERE cwd IS NOT NULL AND cwd != '' AND archived = 0
+              AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation'))
+              AND (source IS NULL OR (source NOT LIKE '%"subagent"%' AND source NOT LIKE '%"guardian"%'))
+              AND (title IS NULL OR (title != 'Guardian review' AND title NOT LIKE '%Guardian review%'))
             GROUP BY cwd
             ORDER BY last_active DESC
             LIMIT 50
@@ -553,6 +611,9 @@ def handle():
                 SELECT id, title, model, cwd, updated_at
                 FROM threads
                 WHERE archived = 0 AND cwd = ?
+                  AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation'))
+                  AND (source IS NULL OR (source NOT LIKE '%"subagent"%' AND source NOT LIKE '%"guardian"%'))
+                  AND (title IS NULL OR (title != 'Guardian review' AND title NOT LIKE '%Guardian review%'))
                 ORDER BY updated_at DESC
                 LIMIT 50
             """, (cwd,))
@@ -561,6 +622,9 @@ def handle():
                 SELECT id, title, model, cwd, updated_at
                 FROM threads
                 WHERE archived = 0
+                  AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation'))
+                  AND (source IS NULL OR (source NOT LIKE '%"subagent"%' AND source NOT LIKE '%"guardian"%'))
+                  AND (title IS NULL OR (title != 'Guardian review' AND title NOT LIKE '%Guardian review%'))
                 ORDER BY updated_at DESC
                 LIMIT 50
             """)
@@ -599,11 +663,16 @@ async fn list_ssh_projects(server_id: &str) -> Result<Vec<CodexProjectItem>, Str
         .find(|s| s.id == server_id)
         .ok_or_else(|| format!("未找到目标 SSH 服务器: {}", server_id))?;
 
-    let payload = serde_json::json!({ "action": "list_projects" }).to_string();
+    let payload = serde_json::json!({
+        "action": "list_projects",
+        "codex_home": server.codex_home,
+    })
+    .to_string();
+    let b64_payload = BASE64_STANDARD.encode(payload.as_bytes());
     let output = ssh_server::run_ssh(
         &server,
         15,
-        &["python3", "-", &payload],
+        &["python3", "-", &b64_payload],
         Some(PYTHON_SSH_DISCOVERY.to_string()),
     )
     .await?;
@@ -644,14 +713,15 @@ async fn list_ssh_threads(
 
     let payload = serde_json::json!({
         "action": "list_threads",
-        "cwd": cwd
+        "cwd": cwd,
+        "codex_home": server.codex_home,
     })
     .to_string();
-
+    let b64_payload = BASE64_STANDARD.encode(payload.as_bytes());
     let output = ssh_server::run_ssh(
         &server,
         15,
-        &["python3", "-", &payload],
+        &["python3", "-", &b64_payload],
         Some(PYTHON_SSH_DISCOVERY.to_string()),
     )
     .await?;
@@ -711,6 +781,22 @@ def execute():
     
     codex_home_env = os.environ.get("CODEX_HOME")
     codex_home = Path(codex_home_env) if codex_home_env else (Path.home() / ".codex")
+
+    # Inherit model from thread if not explicitly specified
+    if not model and thread_id:
+        try:
+            state_db = codex_home / "state_5.sqlite"
+            if state_db.exists():
+                c_conn = sqlite3.connect(f"file:{state_db}?mode=ro", uri=True)
+                c_cur = c_conn.cursor()
+                c_cur.execute("SELECT model FROM threads WHERE id = ? LIMIT 1", (thread_id,))
+                r = c_cur.fetchone()
+                if r and r[0] and str(r[0]).strip():
+                    model = str(r[0]).strip()
+                c_conn.close()
+        except Exception:
+            pass
+
     sock_path = codex_home / "app-server-control" / "app-server-control.sock"
     target_cwd = cwd if (cwd and os.path.isdir(cwd)) else str(Path.home())
     
@@ -959,6 +1045,14 @@ fn find_latest_created_thread(cwd: &str) -> Option<String> {
 }
 
 async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
+    if (task.model.is_none() || task.model.as_ref().map(|m| m.trim().is_empty()).unwrap_or(false))
+        && task.source == "local"
+    {
+        if let Some(ref tid) = task.thread_id {
+            task.model = get_local_thread_model(tid);
+        }
+    }
+
     let payload = serde_json::json!({
         "thread_id": task.thread_id,
         "prompt": task.prompt,

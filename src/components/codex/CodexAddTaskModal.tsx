@@ -88,22 +88,53 @@ export function CodexAddTaskModal({
       });
   }, [isOpen, selectedServerId]);
 
+  // Handler for target source switch (local <-> ssh)
+  const handleSourceChange = (newSource: 'local' | 'ssh') => {
+    if (newSource === source) return;
+    setSource(newSource);
+    setCwd('');
+    setProjects([]);
+    setThreads([]);
+    setSelectedThreadId('');
+    setIsCustomCwd(false);
+  };
+
+  // Handler for SSH server switch
+  const handleServerChange = (newServerId: string) => {
+    if (newServerId === selectedServerId) return;
+    setSelectedServerId(newServerId);
+    setCwd('');
+    setProjects([]);
+    setThreads([]);
+    setSelectedThreadId('');
+    setIsCustomCwd(false);
+  };
+
   // Load projects whenever source or selectedServerId changes
   const loadProjects = useCallback(async () => {
+    if (source === 'ssh' && !selectedServerId) {
+      setProjects([]);
+      return;
+    }
     setLoadingProjects(true);
     try {
       const serverId = source === 'ssh' ? selectedServerId : undefined;
       const list = await listCodexProjects(source, serverId);
       setProjects(list);
-      if (list.length > 0 && !cwd && !defaultCwd) {
-        setCwd(list[0].cwd);
-      }
+      setCwd((prevCwd) => {
+        if (prevCwd && list.some((p) => p.cwd === prevCwd)) {
+          return prevCwd;
+        }
+        return list.length > 0 ? list[0].cwd : '';
+      });
     } catch (err) {
       console.warn('Failed to list projects:', err);
+      setProjects([]);
+      setCwd('');
     } finally {
       setLoadingProjects(false);
     }
-  }, [source, selectedServerId, cwd, defaultCwd]);
+  }, [source, selectedServerId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -121,12 +152,19 @@ export function CodexAddTaskModal({
       const serverId = source === 'ssh' ? selectedServerId : undefined;
       const list = await listCodexThreads(source, serverId, cwd);
       setThreads(list);
-      if (defaultThreadId && list.some((t) => t.id === defaultThreadId)) {
-        setThreadMode('existing');
-        setSelectedThreadId(defaultThreadId);
-      }
+      setSelectedThreadId((prevId) => {
+        if (prevId && list.some((t) => t.id === prevId)) {
+          return prevId;
+        }
+        if (defaultThreadId && list.some((t) => t.id === defaultThreadId)) {
+          return defaultThreadId;
+        }
+        return list.length > 0 ? list[0].id : '';
+      });
     } catch (err) {
       console.warn('Failed to list threads:', err);
+      setThreads([]);
+      setSelectedThreadId('');
     } finally {
       setLoadingThreads(false);
     }
@@ -177,11 +215,19 @@ export function CodexAddTaskModal({
       let chosenThreadId: string | undefined = undefined;
       let chosenThreadTitle: string | undefined = undefined;
 
-      if (threadMode === 'existing' && selectedThreadId) {
-        chosenThreadId = selectedThreadId;
-        const matchingThread = threads.find((t) => t.id === selectedThreadId);
-        chosenThreadTitle = matchingThread?.title;
+      const matchingThread =
+        threadMode === 'existing' && selectedThreadId
+          ? threads.find((t) => t.id === selectedThreadId)
+          : undefined;
+
+      if (matchingThread) {
+        chosenThreadId = matchingThread.id;
+        chosenThreadTitle = matchingThread.title;
       }
+
+      // Inherit model from existing thread if default model is chosen
+      const effectiveModel =
+        model.trim() || (threadMode === 'existing' ? matchingThread?.model : undefined);
 
       const req: CreateQueuedTaskRequest = {
         title: title.trim() || undefined,
@@ -192,7 +238,7 @@ export function CodexAddTaskModal({
         cwd: cwd.trim(),
         thread_id: chosenThreadId,
         thread_title: chosenThreadTitle,
-        model: model.trim() || undefined,
+        model: effectiveModel,
       };
 
       await addCodexQueuedTask(req);
@@ -247,7 +293,7 @@ export function CodexAddTaskModal({
               <button
                 type="button"
                 className={`segmented-btn ${source === 'local' ? 'active' : ''}`}
-                onClick={() => setSource('local')}
+                onClick={() => handleSourceChange('local')}
               >
                 <Laptop className="btn-icon" />
                 <span>{t('codexQueue.localMachine', '本机环境')}</span>
@@ -255,7 +301,7 @@ export function CodexAddTaskModal({
               <button
                 type="button"
                 className={`segmented-btn ${source === 'ssh' ? 'active' : ''}`}
-                onClick={() => setSource('ssh')}
+                onClick={() => handleSourceChange('ssh')}
               >
                 <Server className="btn-icon" />
                 <span>{t('codexQueue.sshServer', 'SSH 远程服务器')}</span>
@@ -275,7 +321,7 @@ export function CodexAddTaskModal({
                   <select
                     className="form-select"
                     value={selectedServerId}
-                    onChange={(e) => setSelectedServerId(e.target.value)}
+                    onChange={(e) => handleServerChange(e.target.value)}
                   >
                     {sshServers.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -352,29 +398,23 @@ export function CodexAddTaskModal({
               <MessageSquare className="label-icon" />
               {t('codexQueue.targetThread', '目标会话')}
             </label>
-            <div className="thread-mode-selector">
-              <label className="radio-label">
-                <input
-                  type="radio"
-                  name="threadMode"
-                  value="new"
-                  checked={threadMode === 'new'}
-                  onChange={() => setThreadMode('new')}
-                />
-                <Sparkles className="radio-icon" />
+            <div className="target-segmented-control thread-mode-segmented-control">
+              <button
+                type="button"
+                className={`segmented-btn ${threadMode === 'new' ? 'active' : ''}`}
+                onClick={() => setThreadMode('new')}
+              >
+                <Sparkles className="btn-icon" />
                 <span>{t('codexQueue.newThread', '新建独立会话')}</span>
-              </label>
-              <label className="radio-label">
-                <input
-                  type="radio"
-                  name="threadMode"
-                  value="existing"
-                  checked={threadMode === 'existing'}
-                  onChange={() => setThreadMode('existing')}
-                />
-                <MessageSquare className="radio-icon" />
+              </button>
+              <button
+                type="button"
+                className={`segmented-btn ${threadMode === 'existing' ? 'active' : ''}`}
+                onClick={() => setThreadMode('existing')}
+              >
+                <MessageSquare className="btn-icon" />
                 <span>{t('codexQueue.existingThread', '追加到已有会话')}</span>
-              </label>
+              </button>
             </div>
 
             {threadMode === 'existing' && (
@@ -462,7 +502,12 @@ export function CodexAddTaskModal({
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
               >
-                {COMMON_MODELS.map((m) => (
+                <option value="">
+                  {threadMode === 'existing' && selectedThreadObj?.model
+                    ? `默认模型 (继承会话: ${selectedThreadObj.model})`
+                    : '默认模型 (Default)'}
+                </option>
+                {COMMON_MODELS.filter((m) => m.value !== '').map((m) => (
                   <option key={m.value} value={m.value}>
                     {m.label}
                   </option>
