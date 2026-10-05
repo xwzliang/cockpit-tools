@@ -463,12 +463,43 @@ export function CodexTaskQueueSection({
               </button>
             </div>
           ) : (
-            <div className="queue-task-list">
-              {tasks.map((task, index) => {
-                const isExpanded = expandedTaskIds.has(task.id);
-                const isPending = task.status === 'pending' || task.status === 'waiting_interrupted';
-                const duration = formatDuration(task);
-                const cwdBasename = task.cwd.split('/').filter(Boolean).pop() || task.cwd;
+            <div className="queue-task-list-wrapper">
+              <div className="queue-list-toolbar">
+                <div className="list-toolbar-left">
+                  <span className="task-list-title">
+                    {t('codexQueue.taskList', '排队列表')}
+                  </span>
+                  <span className="task-list-badge">{tasks.length}</span>
+                </div>
+                <div className="list-toolbar-right">
+                  <button
+                    type="button"
+                    className="btn-add-queued-task"
+                    onClick={() => setIsAddModalOpen(true)}
+                  >
+                    <Plus className="btn-icon" />
+                    <span>{t('codexQueue.addTask', '添加排队任务')}</span>
+                  </button>
+                  {completedCount > 0 && (
+                    <button
+                      type="button"
+                      className="btn-clear-completed"
+                      onClick={handleClearCompleted}
+                      title={t('codexQueue.clearCompleted', '清空已完成任务')}
+                    >
+                      <Trash2 className="btn-icon" />
+                      <span>{t('codexQueue.clearCompletedBtn', '清空完成')}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="queue-task-list">
+                {tasks.map((task, index) => {
+                  const isExpanded = expandedTaskIds.has(task.id);
+                  const isPending = task.status === 'pending' || task.status === 'waiting_interrupted';
+                  const duration = formatDuration(task);
+                  const cwdBasename = task.cwd.split('/').filter(Boolean).pop() || task.cwd;
 
                 return (
                   <div
@@ -650,6 +681,7 @@ export function CodexTaskQueueSection({
                   </div>
                 );
               })}
+              </div>
             </div>
           )}
         </div>

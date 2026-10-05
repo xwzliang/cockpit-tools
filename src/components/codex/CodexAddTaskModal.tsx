@@ -64,7 +64,7 @@ export function CodexAddTaskModal({
 
   const [threads, setThreads] = useState<CodexThreadSummary[]>([]);
   const [loadingThreads, setLoadingThreads] = useState(false);
-  const [threadMode, setThreadMode] = useState<'new' | 'existing'>('new');
+  const [threadMode, setThreadMode] = useState<'new' | 'existing'>(defaultThreadId ? 'existing' : 'new');
   const [selectedThreadId, setSelectedThreadId] = useState<string>(defaultThreadId || '');
 
   const [title, setTitle] = useState('');
@@ -215,15 +215,20 @@ export function CodexAddTaskModal({
       let chosenThreadId: string | undefined = undefined;
       let chosenThreadTitle: string | undefined = undefined;
 
-      const matchingThread =
-        threadMode === 'existing' && selectedThreadId
-          ? threads.find((t) => t.id === selectedThreadId)
-          : undefined;
-
-      if (matchingThread) {
-        chosenThreadId = matchingThread.id;
-        chosenThreadTitle = matchingThread.title;
+      if (threadMode === 'existing') {
+        if (!selectedThreadId) {
+          setError(t('codexQueue.threadRequired', '请选择要追加的目标会话'));
+          return;
+        }
+        chosenThreadId = selectedThreadId;
+        const matchingThread = threads.find((t) => t.id === selectedThreadId);
+        chosenThreadTitle = matchingThread ? matchingThread.title : undefined;
       }
+
+      const matchingThread =
+        threadMode === 'existing' && chosenThreadId
+          ? threads.find((t) => t.id === chosenThreadId)
+          : undefined;
 
       // Inherit model from existing thread if default model is chosen
       const effectiveModel =
@@ -410,7 +415,12 @@ export function CodexAddTaskModal({
               <button
                 type="button"
                 className={`segmented-btn ${threadMode === 'existing' ? 'active' : ''}`}
-                onClick={() => setThreadMode('existing')}
+                onClick={() => {
+                  setThreadMode('existing');
+                  if (!selectedThreadId && threads.length > 0) {
+                    setSelectedThreadId(threads[0].id);
+                  }
+                }}
               >
                 <MessageSquare className="btn-icon" />
                 <span>{t('codexQueue.existingThread', '追加到已有会话')}</span>

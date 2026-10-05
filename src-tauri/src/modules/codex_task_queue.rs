@@ -883,6 +883,11 @@ def execute():
                 while True:
                     msg = json.loads(read_ws_msg())
                     if msg.get("id") == 2:
+                        if "error" in msg:
+                            err_obj = msg["error"]
+                            err_msg = err_obj.get("message") if isinstance(err_obj, dict) else str(err_obj)
+                            s.close()
+                            return {"success": False, "message": f"创建新会话失败: {err_msg}"}
                         res_val = msg.get("result", {})
                         t_obj = res_val.get("thread", {})
                         active_thread_id = t_obj.get("id")
@@ -893,6 +898,11 @@ def execute():
                 while True:
                     msg = json.loads(read_ws_msg())
                     if msg.get("id") == 2:
+                        if "error" in msg:
+                            err_obj = msg["error"]
+                            err_msg = err_obj.get("message") if isinstance(err_obj, dict) else str(err_obj)
+                            s.close()
+                            return {"success": False, "message": f"恢复指定会话失败: {err_msg}"}
                         break
 
             if not active_thread_id:
@@ -910,6 +920,11 @@ def execute():
             while True:
                 msg = json.loads(read_ws_msg())
                 if msg.get("id") == 3:
+                    if "error" in msg:
+                        err_obj = msg["error"]
+                        err_msg = err_obj.get("message") if isinstance(err_obj, dict) else str(err_obj)
+                        s.close()
+                        return {"success": False, "message": f"Codex 派发轮次失败: {err_msg}"}
                     break
             s.close()
             return {
@@ -922,8 +937,10 @@ def execute():
             if s:
                 try: s.close()
                 except: pass
+            if connected:
+                return {"success": False, "message": f"Codex 通信异常: {str(e)}"}
 
-    # 2. Fallback to CLI
+    # 2. Fallback to CLI only if app-server socket is not connected
     codex_bin = subprocess.getoutput("which codex").strip() or str(Path.home() / ".local/bin/codex")
     log_file = codex_home / f"task_queue_{task_id}.log"
     
@@ -1446,7 +1463,18 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
                 }
 
                 // If interrupted task can be resumed now (quota available / time reached):
-                if interrupted.can_resume {
+                let (_, _, quota_can_resume) = codex_auto_resume::get_current_codex_quota_resets_at();
+                let quota_zero = if let Some(acc) = crate::modules::codex_account::get_current_account() {
+                    if let Some(ref q) = acc.quota {
+                        q.hourly_percentage <= 0
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if quota_can_resume && !quota_zero && interrupted.can_resume {
                     logger::log_info(&format!(
                         "[CodexTaskQueue] 排队任务依赖的中断任务已满足恢复条件，优先启动恢复: thread_id={}",
                         tid
@@ -1471,16 +1499,24 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
             }
         }
 
-        // Check quota availability for local execution: if quota is hard-blocked and cannot resume, wait
-        if tasks[idx].source == "local" {
-            let (_, _, can_resume) = codex_auto_resume::get_current_codex_quota_resets_at();
-            if !can_resume {
-                logger::log_info(&format!(
-                    "[CodexTaskQueue] 本地账号当前用量受限，排队任务暂缓提交: id={}",
-                    tasks[idx].id
-                ));
-                continue;
+        // RULE: Queued tasks must NOT be sent when 5h quota is zero or exhausted!
+        let (_, _, quota_can_resume) = codex_auto_resume::get_current_codex_quota_resets_at();
+        let quota_exhausted = if let Some(acc) = crate::modules::codex_account::get_current_account() {
+            if let Some(ref q) = acc.quota {
+                q.hourly_percentage <= 0
+            } else {
+                false
             }
+        } else {
+            false
+        };
+
+        if !quota_can_resume || quota_exhausted {
+            logger::log_info(&format!(
+                "[CodexTaskQueue] 当前账号 5 小时配额为 0% 或受限，排队任务暂缓提交: id={}, source={}",
+                tasks[idx].id, tasks[idx].source
+            ));
+            continue;
         }
 
         // Eligible to launch!

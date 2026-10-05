@@ -363,7 +363,7 @@ def detect_interrupted_tasks():
                     continue
                 resets_at, reset_window_minutes, error_msg, is_limited = parse_rollout_tail(rollout_path)
                 if is_limited:
-                    can_resume = (resets_at is None) or (now_ts >= resets_at)
+                    can_resume = (resets_at is not None) and (now_ts >= resets_at)
                     tasks.append({
                         "id": f"ssh:{t_id}",
                         "source": "ssh",
@@ -492,6 +492,11 @@ def resume_thread(thread_id, is_goal, prompt, cwd=None, model=None):
             while True:
                 msg = json.loads(read_ws_msg())
                 if msg.get("id") == 2:
+                    if "error" in msg:
+                        err_obj = msg["error"]
+                        err_msg = err_obj.get("message") if isinstance(err_obj, dict) else str(err_obj)
+                        s.close()
+                        return {"success": False, "message": f"Codex 会话恢复失败: {err_msg}"}
                     break
 
             # Start turn with input array: [{"type": "text", "text": prompt}]
@@ -506,15 +511,22 @@ def resume_thread(thread_id, is_goal, prompt, cwd=None, model=None):
             while True:
                 msg = json.loads(read_ws_msg())
                 if msg.get("id") == 3:
+                    if "error" in msg:
+                        err_obj = msg["error"]
+                        err_msg = err_obj.get("message") if isinstance(err_obj, dict) else str(err_obj)
+                        s.close()
+                        return {"success": False, "message": f"Codex 启动轮次失败: {err_msg}"}
                     break
             s.close()
             return {"success": True, "mode": "app-server", "message": f"已通过 Codex 守护进程成功恢复并启动任务: {thread_id}"}
-        except Exception:
+        except Exception as e:
             if s:
                 try: s.close()
                 except: pass
+            if connected:
+                return {"success": False, "message": f"Codex 通信异常: {str(e)}"}
 
-    # Fallback to CLI
+    # Fallback to CLI only if app-server socket is not connected
     codex_bin = subprocess.getoutput("which codex").strip() or str(Path.home() / ".local/bin/codex")
     target_cwd = cwd if (cwd and os.path.isdir(cwd)) else str(Path.home())
     log_file = codex_home / f"auto_resume_{thread_id}.log"
@@ -657,7 +669,7 @@ pub fn get_current_codex_quota_resets_at() -> (Option<i64>, Option<i64>, bool) {
     let now_ts = Utc::now().timestamp();
     let account = match crate::modules::codex_account::get_current_account() {
         Some(acc) => acc,
-        None => return (None, None, true),
+        None => return (None, None, false),
     };
     let quota = match account.quota {
         Some(q) => q,
@@ -676,31 +688,22 @@ pub fn get_current_codex_quota_resets_at() -> (Option<i64>, Option<i64>, bool) {
     let mut target_window = hourly_window;
 
     if hourly_exhausted {
-        if let Some(h_ts) = hourly_reset {
-            if h_ts > now_ts {
-                is_blocked = true;
-                target_reset_ts = Some(h_ts);
-            }
-        } else {
-            is_blocked = true;
-        }
+        is_blocked = true;
+        target_reset_ts = hourly_reset;
     }
 
     if weekly_exhausted {
-        if let Some(w_ts) = weekly_reset {
-            if w_ts > now_ts {
-                is_blocked = true;
-                target_reset_ts = match target_reset_ts {
-                    Some(cur) => Some(cur.max(w_ts)),
-                    None => {
-                        target_window = quota.weekly_window_minutes;
-                        Some(w_ts)
-                    }
-                };
+        is_blocked = true;
+        target_reset_ts = match target_reset_ts {
+            Some(cur) => match weekly_reset {
+                Some(w_ts) => Some(cur.max(w_ts)),
+                None => Some(cur),
+            },
+            None => {
+                target_window = quota.weekly_window_minutes;
+                weekly_reset
             }
-        } else {
-            is_blocked = true;
-        }
+        };
     }
 
     if is_blocked {
