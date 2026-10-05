@@ -429,6 +429,14 @@ pub fn ensure_started(app: AppHandle) {
     }
     *started = true;
 
+    let app_for_queue = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let _ = crate::modules::codex_task_queue::run_queue_dispatcher_step(Some(&app_for_queue)).await;
+            sleep(Duration::from_secs(5)).await;
+        }
+    });
+
     tauri::async_runtime::spawn(async move {
         loop {
             run_scheduler_once(&app).await;
