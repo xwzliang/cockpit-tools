@@ -1,5 +1,6 @@
 use crate::models::ssh_server::SshServer;
 use crate::modules::{config, logger, ssh_server};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use rusqlite::OpenFlags;
 use serde::{Deserialize, Serialize};
@@ -523,7 +524,12 @@ def resume_thread(thread_id, is_goal, prompt, cwd=None, model=None):
     return {"success": True, "mode": "cli", "message": f"已通过 Codex CLI 后台启动恢复任务: {thread_id}"}
 
 try:
-    data = json.loads(sys.argv[1])
+    raw_arg = sys.argv[1]
+    try:
+        raw_arg = base64.b64decode(raw_arg).decode("utf-8")
+    except Exception:
+        pass
+    data = json.loads(raw_arg)
     res = resume_thread(
         thread_id=data["thread_id"],
         is_goal=data.get("is_goal", False),
@@ -1040,12 +1046,13 @@ async fn resume_task_internal(
         "model": task.model
     })
     .to_string();
+    let b64_json = BASE64_STANDARD.encode(helper_json.as_bytes());
 
     if task.source == "local" {
         // Attempt using python resume helper first (handles app-server socket & goals_1.sqlite cleanly)
         let child = std::process::Command::new("python3")
             .arg("-")
-            .arg(&helper_json)
+            .arg(&b64_json)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1132,7 +1139,7 @@ async fn resume_task_internal(
         let output = ssh_server::run_ssh(
             &server,
             25,
-            &["python3", "-", &helper_json],
+            &["python3", "-", &b64_json],
             Some(PYTHON_RESUME_HELPER.to_string()),
         )
         .await?;
@@ -1156,8 +1163,15 @@ async fn resume_task_internal(
                         success: true,
                         message: format!("已在服务器【{}】恢复任务: {}", server.name, msg),
                     });
-                } else if let Some(err) = val.get("message").and_then(|v| v.as_str()) {
-                    return Err(format!("远端恢复执行失败: {}", err));
+                } else {
+                    let err = val
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("远端 Python 执行失败");
+                    logger::log_warn(&format!(
+                        "[CodexAutoResume] 服务器【{}】Python 恢复未成功 ({})，尝试 CLI 降级: thread_id={}",
+                        server.name, err, task.thread_id
+                    ));
                 }
             }
         }
@@ -1544,6 +1558,38 @@ mod tests {
         let test_task_id = "test:delete:999";
         let _ = delete_interrupted_task(test_task_id);
         assert!(load_dismissed_task_ids().contains(test_task_id));
+    }
+
+    #[test]
+    fn test_python_resume_helper_base64_payload() {
+        use std::io::Write;
+        let test_payload = serde_json::json!({
+            "thread_id": "test-uuid-non-existent",
+            "is_goal": false,
+            "prompt": "Continue working /goal test 'quotes' and {braces}, commas.",
+            "cwd": "/tmp",
+            "model": "gpt-6-astra"
+        });
+        let b64 = BASE64_STANDARD.encode(test_payload.to_string().as_bytes());
+
+        let mut child = std::process::Command::new("python3")
+            .arg("-")
+            .arg(&b64)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn python3");
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(PYTHON_RESUME_HELPER.as_bytes());
+        }
+
+        let output = child.wait_with_output().expect("Failed to read python output");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("__CODEX_RESUME_RESULT_JSON_START__"));
+        assert!(stdout.contains("__CODEX_RESUME_RESULT_JSON_END__"));
+        assert!(!stdout.contains("Expecting value: line 1 column 1"));
     }
 }
 
