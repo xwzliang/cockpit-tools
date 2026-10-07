@@ -65,6 +65,7 @@ export function CodexTaskQueueSection({
   });
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<'queue' | 'finished'>('queue');
 
   const loadData = useCallback(async (isSilent = false) => {
     if (!isSilent) {
@@ -180,6 +181,7 @@ export function CodexTaskQueueSection({
   const handleRetryTask = async (taskId: string) => {
     try {
       await retryCodexQueuedTask(taskId);
+      setActiveTab('queue');
       await loadData(true);
     } catch (err) {
       setError(String(err));
@@ -196,14 +198,27 @@ export function CodexTaskQueueSection({
     }
   };
 
-  // Move task up/down in queue
-  const handleMoveTask = async (index: number, direction: 'up' | 'down') => {
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= tasks.length) return;
+  // Move task up/down in active queue
+  const handleMoveActiveTask = async (taskId: string, direction: 'up' | 'down') => {
+    const activeIndex = activeTasks.findIndex((t) => t.id === taskId);
+    if (activeIndex === -1) return;
+    const targetActiveIndex = direction === 'up' ? activeIndex - 1 : activeIndex + 1;
+    if (targetActiveIndex < 0 || targetActiveIndex >= activeTasks.length) return;
+
+    const currentTask = activeTasks[activeIndex];
+    const targetTask = activeTasks[targetActiveIndex];
+
+    // Cannot move above a currently running task
+    if (direction === 'up' && targetTask.status === 'running') return;
+
+    const idxCurrent = tasks.findIndex((t) => t.id === currentTask.id);
+    const idxTarget = tasks.findIndex((t) => t.id === targetTask.id);
+    if (idxCurrent === -1 || idxTarget === -1) return;
 
     const newTasks = [...tasks];
-    const [moved] = newTasks.splice(index, 1);
-    newTasks.splice(targetIndex, 0, moved);
+    const temp = newTasks[idxCurrent];
+    newTasks[idxCurrent] = newTasks[idxTarget];
+    newTasks[idxTarget] = temp;
     setTasks(newTasks);
 
     try {
@@ -213,6 +228,14 @@ export function CodexTaskQueueSection({
       loadData(true);
     }
   };
+
+  const activeTasks = tasks.filter(
+    (t) => t.status === 'pending' || t.status === 'waiting_interrupted' || t.status === 'running'
+  );
+  const finishedTasks = tasks.filter(
+    (t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'
+  );
+  const displayedTasks = activeTab === 'queue' ? activeTasks : finishedTasks;
 
   const runningCount = tasks.filter((t) => t.status === 'running').length;
   const pendingCount = tasks.filter(
@@ -300,6 +323,11 @@ export function CodexTaskQueueSection({
                 {pendingCount > 0 && (
                   <span className="count-chip pending" title="等待中">
                     {pendingCount} 排队
+                  </span>
+                )}
+                {completedCount > 0 && (
+                  <span className="count-chip completed" title="已完成">
+                    {completedCount} 完成
                   </span>
                 )}
               </div>
@@ -442,248 +470,289 @@ export function CodexTaskQueueSection({
             </div>
           </div>
 
-          {/* Task Cards List */}
-          {tasks.length === 0 ? (
-            <div className="queue-empty-state">
-              <ListOrdered className="empty-icon" />
-              <h4>{t('codexQueue.emptyTitle', '当前任务队列为空')}</h4>
-              <p>
-                {t(
-                  'codexQueue.emptyDesc',
-                  '点击右上角「添加任务」，可在本机或远程服务器的项目中创建新会话或追加已有会话任务。'
-                )}
-              </p>
-              <button
-                type="button"
-                className="btn-primary empty-add-btn"
-                onClick={() => setIsAddModalOpen(true)}
-              >
-                <Plus className="btn-icon" />
-                <span>{t('codexQueue.addTask', '立即添加任务')}</span>
-              </button>
-            </div>
-          ) : (
-            <div className="queue-task-list-wrapper">
-              <div className="queue-list-toolbar">
-                <div className="list-toolbar-left">
-                  <span className="task-list-title">
-                    {t('codexQueue.taskList', '排队列表')}
-                  </span>
-                  <span className="task-list-badge">{tasks.length}</span>
-                </div>
-                <div className="list-toolbar-right">
+          {/* Task Cards List with Tabs */}
+          <div className="queue-task-list-wrapper">
+            <div className="queue-list-toolbar">
+              <div className="list-toolbar-left">
+                <div className="queue-tabs-group" role="tablist">
                   <button
                     type="button"
-                    className="btn-add-queued-task"
-                    onClick={() => setIsAddModalOpen(true)}
+                    role="tab"
+                    aria-selected={activeTab === 'queue'}
+                    className={`queue-tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('queue')}
                   >
-                    <Plus className="btn-icon" />
-                    <span>{t('codexQueue.addTask', '添加排队任务')}</span>
+                    <Clock className="tab-icon" />
+                    <span className="tab-label">{t('codexQueue.tabWaiting', '排队中')}</span>
+                    <span className={`queue-tab-badge ${activeTasks.length > 0 ? 'highlight' : ''}`}>
+                      {activeTasks.length}
+                    </span>
                   </button>
-                  {completedCount > 0 && (
-                    <button
-                      type="button"
-                      className="btn-clear-completed"
-                      onClick={handleClearCompleted}
-                      title={t('codexQueue.clearCompleted', '清空已完成任务')}
-                    >
-                      <Trash2 className="btn-icon" />
-                      <span>{t('codexQueue.clearCompletedBtn', '清空完成')}</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'finished'}
+                    className={`queue-tab-btn ${activeTab === 'finished' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('finished')}
+                  >
+                    <CheckCircle className="tab-icon" />
+                    <span className="tab-label">{t('codexQueue.tabFinished', '已结束')}</span>
+                    <span className="queue-tab-badge">
+                      {finishedTasks.length}
+                    </span>
+                  </button>
                 </div>
               </div>
+              <div className="list-toolbar-right">
+                <button
+                  type="button"
+                  className="btn-add-queued-task"
+                  onClick={() => setIsAddModalOpen(true)}
+                >
+                  <Plus className="btn-icon" />
+                  <span>{t('codexQueue.addTask', '添加排队任务')}</span>
+                </button>
+                {completedCount > 0 && (
+                  <button
+                    type="button"
+                    className="btn-clear-completed"
+                    onClick={handleClearCompleted}
+                    title={t('codexQueue.clearCompleted', '清空已完成任务')}
+                  >
+                    <Trash2 className="btn-icon" />
+                    <span>{t('codexQueue.clearCompletedBtn', '清空完成')}</span>
+                  </button>
+                )}
+              </div>
+            </div>
 
+            {displayedTasks.length === 0 ? (
+              <div className="queue-tab-empty-state">
+                {activeTab === 'queue' ? (
+                  <>
+                    <Clock className="tab-empty-icon" />
+                    <h4>{t('codexQueue.noWaitingTasks', '当前没有排队中的任务')}</h4>
+                    <p>
+                      {t(
+                        'codexQueue.noWaitingTasksDesc',
+                        '点击右上角「添加排队任务」，可在本机或远程服务器的项目中创建新会话或追加已有会话任务。'
+                      )}
+                    </p>
+                    <button
+                      type="button"
+                      className="empty-add-btn"
+                      onClick={() => setIsAddModalOpen(true)}
+                    >
+                      <Plus className="btn-icon" />
+                      <span>{t('codexQueue.addTask', '立即添加任务')}</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="tab-empty-icon" />
+                    <h4>{t('codexQueue.noFinishedTasks', '暂无已结束的任务')}</h4>
+                    <p>
+                      {t(
+                        'codexQueue.noFinishedTasksDesc',
+                        '排队执行完成或失败的任务会在此处归档显示。'
+                      )}
+                    </p>
+                  </>
+                )}
+              </div>
+            ) : (
               <div className="queue-task-list">
-                {tasks.map((task, index) => {
+                {displayedTasks.map((task, index) => {
                   const isExpanded = expandedTaskIds.has(task.id);
-                  const isPending = task.status === 'pending' || task.status === 'waiting_interrupted';
+                  const isPending =
+                    activeTab === 'queue' &&
+                    (task.status === 'pending' || task.status === 'waiting_interrupted');
                   const duration = formatDuration(task);
                   const cwdBasename = task.cwd.split('/').filter(Boolean).pop() || task.cwd;
 
-                return (
-                  <div
-                    key={task.id}
-                    className={`queue-task-card status-${task.status}`}
-                  >
-                    {/* Left Reorder controls for pending tasks */}
-                    <div className="card-left-controls">
-                      {isPending ? (
-                        <div className="reorder-btn-group">
-                          <button
-                            type="button"
-                            className="reorder-btn"
-                            disabled={index === 0}
-                            onClick={() => handleMoveTask(index, 'up')}
-                            title={t('codexQueue.moveUp', '上移')}
-                          >
-                            <ArrowUp />
-                          </button>
-                          <span className="order-number">#{index + 1}</span>
-                          <button
-                            type="button"
-                            className="reorder-btn"
-                            disabled={index === tasks.length - 1}
-                            onClick={() => handleMoveTask(index, 'down')}
-                            title={t('codexQueue.moveDown', '下移')}
-                          >
-                            <ArrowDown />
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="static-order-number">#{index + 1}</div>
-                      )}
-                    </div>
-
-                    {/* Main content */}
-                    <div className="card-main-content">
-                      <div className="task-header-row">
-                        <div className="title-and-status">
-                          {renderStatusBadge(task.status)}
-                          <h4 className="task-title" onClick={() => toggleExpandTask(task.id)}>
-                            {task.title}
-                          </h4>
-                        </div>
-
-                        {/* Top Chips */}
-                        <div className="task-meta-chips">
-                          {/* Target Source */}
-                          <span className="meta-chip target" title={`执行环境: ${task.source}`}>
-                            {task.source === 'local' ? (
-                              <>
-                                <Laptop className="chip-icon" />
-                                <span>本机</span>
-                              </>
-                            ) : (
-                              <>
-                                <Server className="chip-icon" />
-                                <span>{task.server_name || '远端 SSH'}</span>
-                              </>
-                            )}
-                          </span>
-
-                          {/* Project cwd */}
-                          <span className="meta-chip cwd" title={task.cwd}>
-                            <Folder className="chip-icon" />
-                            <span>{cwdBasename}</span>
-                          </span>
-
-                          {/* Thread */}
-                          <span className="meta-chip thread" title={task.thread_id ? `会话: ${task.thread_id}` : '新建独立会话'}>
-                            {task.thread_id ? (
-                              <>
-                                <MessageSquare className="chip-icon" />
-                                <span>{task.thread_title || '已有会话'}</span>
-                              </>
-                            ) : (
-                              <>
-                                <Sparkles className="chip-icon" />
-                                <span>新建会话</span>
-                              </>
-                            )}
-                          </span>
-
-                          {/* Model */}
-                          {task.model && (
-                            <span className="meta-chip model">
-                              <span>{task.model}</span>
-                            </span>
-                          )}
-
-                          {/* Duration */}
-                          {duration && (
-                            <span className="meta-chip duration">
-                              <Clock className="chip-icon" />
-                              <span>{duration}</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Prompt Content Preview / Expandable */}
-                      <div
-                        className={`task-prompt-box ${isExpanded ? 'expanded' : ''}`}
-                        onClick={() => toggleExpandTask(task.id)}
-                      >
-                        <p className="prompt-text">{task.prompt}</p>
-                        {task.prompt.length > 90 && (
-                          <span className="expand-hint">
-                            {isExpanded ? t('common.collapse', '收起') : t('common.expand', '展开全部')}
-                          </span>
+                  return (
+                    <div
+                      key={task.id}
+                      className={`queue-task-card status-${task.status}`}
+                    >
+                      {/* Left Reorder controls for pending tasks */}
+                      <div className="card-left-controls">
+                        {isPending ? (
+                          <div className="reorder-btn-group">
+                            <button
+                              type="button"
+                              className="reorder-btn"
+                              disabled={index === 0 || activeTasks[index - 1]?.status === 'running'}
+                              onClick={() => handleMoveActiveTask(task.id, 'up')}
+                              title={t('codexQueue.moveUp', '上移')}
+                            >
+                              <ArrowUp />
+                            </button>
+                            <span className="order-number">#{index + 1}</span>
+                            <button
+                              type="button"
+                              className="reorder-btn"
+                              disabled={index === activeTasks.length - 1}
+                              onClick={() => handleMoveActiveTask(task.id, 'down')}
+                              title={t('codexQueue.moveDown', '下移')}
+                            >
+                              <ArrowDown />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="static-order-number">#{index + 1}</div>
                         )}
                       </div>
 
-                      {/* Waiting Interrupted Notice or Error banner */}
-                      {task.status === 'waiting_interrupted' && (
-                        <div className="task-waiting-interrupted-banner">
-                          <AlertTriangle className="warning-icon" />
-                          <span>
-                            {task.error_message ||
-                              t(
-                                'codexQueue.waitingInterruptedDesc',
-                                '检测到当前会话存在用量中断的任务。调度器已优先恢复该任务，待其完全执行完成后自动提交本任务。'
+                      {/* Main content */}
+                      <div className="card-main-content">
+                        <div className="task-header-row">
+                          <div className="title-and-status">
+                            {renderStatusBadge(task.status)}
+                            <h4 className="task-title" onClick={() => toggleExpandTask(task.id)}>
+                              {task.title}
+                            </h4>
+                          </div>
+
+                          {/* Top Chips */}
+                          <div className="task-meta-chips">
+                            {/* Target Source */}
+                            <span className="meta-chip target" title={`执行环境: ${task.source}`}>
+                              {task.source === 'local' ? (
+                                <>
+                                  <Laptop className="chip-icon" />
+                                  <span>本机</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Server className="chip-icon" />
+                                  <span>{task.server_name || '远端 SSH'}</span>
+                                </>
                               )}
-                          </span>
-                        </div>
-                      )}
+                            </span>
 
-                      {task.status === 'failed' && task.error_message && (
-                        <div className="task-failed-banner">
-                          <XCircle className="error-icon" />
-                          <span>{task.error_message}</span>
-                        </div>
-                      )}
+                            {/* Project cwd */}
+                            <span className="meta-chip cwd" title={task.cwd}>
+                              <Folder className="chip-icon" />
+                              <span>{cwdBasename}</span>
+                            </span>
 
-                      {/* Footer Timestamps */}
-                      <div className="task-card-footer">
-                        <span className="timestamp-text">
-                          创建于 {new Date(task.created_at * 1000).toLocaleTimeString()}
-                        </span>
-                        {task.started_at && (
+                            {/* Thread */}
+                            <span className="meta-chip thread" title={task.thread_id ? `会话: ${task.thread_id}` : '新建独立会话'}>
+                              {task.thread_id ? (
+                                <>
+                                  <MessageSquare className="chip-icon" />
+                                  <span>{task.thread_title || '已有会话'}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="chip-icon" />
+                                  <span>新建会话</span>
+                                </>
+                              )}
+                            </span>
+
+                            {/* Model */}
+                            {task.model && (
+                              <span className="meta-chip model">
+                                <span>{task.model}</span>
+                              </span>
+                            )}
+
+                            {/* Duration */}
+                            {duration && (
+                              <span className="meta-chip duration">
+                                <Clock className="chip-icon" />
+                                <span>{duration}</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Prompt Content Preview / Expandable */}
+                        <div
+                          className={`task-prompt-box ${isExpanded ? 'expanded' : ''}`}
+                          onClick={() => toggleExpandTask(task.id)}
+                        >
+                          <p className="prompt-text">{task.prompt}</p>
+                          {task.prompt.length > 90 && (
+                            <span className="expand-hint">
+                              {isExpanded ? t('common.collapse', '收起') : t('common.expand', '展开全部')}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Waiting Interrupted Notice or Error banner */}
+                        {task.status === 'waiting_interrupted' && (
+                          <div className="task-waiting-interrupted-banner">
+                            <AlertTriangle className="warning-icon" />
+                            <span>
+                              {task.error_message ||
+                                t(
+                                  'codexQueue.waitingInterruptedDesc',
+                                  '检测到当前会话存在用量中断的任务。调度器已优先恢复该任务，待其完全执行完成后自动提交本任务。'
+                                )}
+                            </span>
+                          </div>
+                        )}
+
+                        {task.status === 'failed' && task.error_message && (
+                          <div className="task-failed-banner">
+                            <XCircle className="error-icon" />
+                            <span>{task.error_message}</span>
+                          </div>
+                        )}
+
+                        {/* Footer Timestamps */}
+                        <div className="task-card-footer">
                           <span className="timestamp-text">
-                            · 开始于 {new Date(task.started_at * 1000).toLocaleTimeString()}
+                            创建于 {new Date(task.created_at * 1000).toLocaleTimeString()}
                           </span>
-                        )}
-                        {task.completed_at && (
-                          <span className="timestamp-text">
-                            · 完成于 {new Date(task.completed_at * 1000).toLocaleTimeString()}
-                          </span>
-                        )}
-                        {task.assigned_thread_id && (
-                          <span className="timestamp-text thread-id-text">
-                            · 关联会话: {task.assigned_thread_id.slice(0, 8)}...
-                          </span>
-                        )}
+                          {task.started_at && (
+                            <span className="timestamp-text">
+                              · 开始于 {new Date(task.started_at * 1000).toLocaleTimeString()}
+                            </span>
+                          )}
+                          {task.completed_at && (
+                            <span className="timestamp-text">
+                              · 完成于 {new Date(task.completed_at * 1000).toLocaleTimeString()}
+                            </span>
+                          )}
+                          {task.assigned_thread_id && (
+                            <span className="timestamp-text thread-id-text">
+                              · 关联会话: {task.assigned_thread_id.slice(0, 8)}...
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Right side actions */}
-                    <div className="card-right-actions">
-                      {task.status === 'failed' && (
+                      {/* Right side actions */}
+                      <div className="card-right-actions">
+                        {task.status === 'failed' && (
+                          <button
+                            type="button"
+                            className="card-action-btn retry-btn"
+                            onClick={() => handleRetryTask(task.id)}
+                            title={t('common.retry', '重试')}
+                          >
+                            <RotateCcw />
+                          </button>
+                        )}
                         <button
                           type="button"
-                          className="card-action-btn retry-btn"
-                          onClick={() => handleRetryTask(task.id)}
-                          title={t('common.retry', '重试')}
+                          className="card-action-btn delete-btn"
+                          onClick={() => handleDeleteTask(task.id)}
+                          title={t('common.delete', '删除任务')}
                         >
-                          <RotateCcw />
+                          <Trash2 />
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        className="card-action-btn delete-btn"
-                        onClick={() => handleDeleteTask(task.id)}
-                        title={t('common.delete', '删除任务')}
-                      >
-                        <Trash2 />
-                      </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 
@@ -691,7 +760,10 @@ export function CodexTaskQueueSection({
       <CodexAddTaskModal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
-        onTaskAdded={() => loadData(true)}
+        onTaskAdded={() => {
+          setActiveTab('queue');
+          loadData(true);
+        }}
       />
     </div>
   );

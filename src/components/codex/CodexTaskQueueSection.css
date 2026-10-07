@@ -103,6 +103,11 @@
   color: #93c5fd;
 }
 
+.count-chip.completed {
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+
 .pulsing-dot {
   width: 6px;
   height: 6px;
@@ -394,6 +399,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
   padding: 8px 12px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -406,13 +413,49 @@
   gap: 8px;
 }
 
-.task-list-title {
+.queue-tabs-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.queue-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #9ca3af);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.queue-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
   color: var(--text-normal, #f3f4f6);
 }
 
-.task-list-badge {
+.queue-tab-btn.active {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.queue-tab-btn .tab-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.queue-tab-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -420,10 +463,53 @@
   height: 18px;
   padding: 0 6px;
   border-radius: 9px;
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted, #9ca3af);
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
+}
+
+.queue-tab-btn.active .queue-tab-badge {
+  background: rgba(59, 130, 246, 0.3);
+  color: #93c5fd;
+}
+
+.queue-tab-badge.highlight {
+  background: rgba(59, 130, 246, 0.25);
+  color: #60a5fa;
+}
+
+.queue-tab-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 20px;
+  background: rgba(255, 255, 255, 0.015);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  text-align: center;
+}
+
+.queue-tab-empty-state .tab-empty-icon {
+  width: 32px;
+  height: 32px;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 10px;
+}
+
+.queue-tab-empty-state h4 {
+  margin: 0 0 6px 0;
+  font-size: 14px;
+  color: var(--text-normal, #e5e7eb);
+}
+
+.queue-tab-empty-state p {
+  margin: 0 0 14px 0;
+  font-size: 12px;
+  color: var(--text-muted, #9ca3af);
+  max-width: 400px;
 }
 
 .list-toolbar-right {
