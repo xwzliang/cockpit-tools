@@ -6,9 +6,15 @@ pub async fn codex_detect_interrupted_tasks(
 
 #[tauri::command]
 pub async fn codex_resume_interrupted_task(
+    app: tauri::AppHandle,
     task: crate::modules::codex_auto_resume::InterruptedCodexTask,
     custom_prompt: Option<String>,
 ) -> Result<crate::modules::codex_auto_resume::ResumeTaskResult, String> {
+    let (_resets_at, _window, current_can_resume) =
+        crate::modules::codex_auto_resume::get_current_codex_quota_resets_at();
+    if !current_can_resume {
+        let _ = crate::modules::codex_auto_resume::check_and_auto_switch_for_earlier_reset(&app).await;
+    }
     crate::modules::codex_auto_resume::resume_task(&task, custom_prompt, "manual").await
 }
 

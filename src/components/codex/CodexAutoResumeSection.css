@@ -518,6 +518,11 @@
   color: var(--text-muted, #9ca3af);
 }
 
+.codex-task-card__reset-account {
+  color: #60a5fa;
+  margin-left: 4px;
+}
+
 .codex-task-card__actions {
   display: flex;
   align-items: center;

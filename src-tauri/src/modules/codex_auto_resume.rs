@@ -49,6 +49,8 @@ pub struct InterruptedCodexTask {
     #[serde(default)]
     pub reset_window_minutes: Option<i64>,
     #[serde(default)]
+    pub reset_account_email: Option<String>,
+    #[serde(default)]
     pub updated_at: i64,
     #[serde(default)]
     pub can_resume: bool,
@@ -730,6 +732,181 @@ pub fn get_current_codex_quota_resets_at() -> (Option<i64>, Option<i64>, bool) {
     }
 }
 
+/// 计算一组候选账号中最早可用的 5 小时配额重置时间戳、窗口时长、是否可恢复及对应账号邮箱
+pub fn compute_earliest_quota_reset_from_accounts(
+    now_ts: i64,
+    current_account: Option<&CodexAccount>,
+    accounts: &[CodexAccount],
+    monitored_account_ids: Option<&std::collections::HashSet<String>>,
+) -> (Option<i64>, Option<i64>, bool, Option<String>) {
+    struct CandidateInfo {
+        email: String,
+        is_current: bool,
+        can_resume: bool,
+        hourly_reset_ts: Option<i64>,
+        hourly_window: Option<i64>,
+        is_weekly_blocked: bool,
+        weekly_reset_ts: Option<i64>,
+    }
+
+    let mut candidates: Vec<CandidateInfo> = Vec::new();
+
+    for acc in accounts {
+        if acc.is_api_key_auth() || acc.is_agent_identity_auth() || acc.is_web_session_auth() {
+            continue;
+        }
+
+        let is_curr = current_account.map(|c| c.id == acc.id).unwrap_or(false);
+        if let Some(set) = monitored_account_ids {
+            if !set.contains(&acc.id) && !is_curr {
+                continue;
+            }
+        }
+
+        let quota = match &acc.quota {
+            Some(q) => q,
+            None => {
+                if is_curr {
+                    return (None, None, true, Some(acc.email.clone()));
+                }
+                continue;
+            }
+        };
+
+        let hourly_window = quota.hourly_window_minutes.or(Some(300));
+        let hourly_reset = quota.hourly_reset_time;
+        let weekly_reset = quota.weekly_reset_time;
+
+        let hourly_exhausted = if quota.hourly_percentage <= 0 {
+            match hourly_reset {
+                Some(reset_ts) => now_ts < reset_ts,
+                None => true,
+            }
+        } else {
+            false
+        };
+
+        let weekly_exhausted = if quota.weekly_percentage <= 0 {
+            match weekly_reset {
+                Some(reset_ts) => now_ts < reset_ts,
+                None => true,
+            }
+        } else {
+            false
+        };
+
+        let can_resume = !hourly_exhausted && !weekly_exhausted;
+
+        candidates.push(CandidateInfo {
+            email: acc.email.clone(),
+            is_current: is_curr,
+            can_resume,
+            hourly_reset_ts: hourly_reset,
+            hourly_window,
+            is_weekly_blocked: weekly_exhausted,
+            weekly_reset_ts: weekly_reset,
+        });
+    }
+
+    // 1. 若当前账号已可恢复，优先使用当前账号
+    if let Some(curr) = candidates.iter().find(|c| c.is_current && c.can_resume) {
+        return (curr.hourly_reset_ts, curr.hourly_window, true, Some(curr.email.clone()));
+    }
+
+    // 2. 若其它候选账号中有已恢复/有额度的，整体可立即恢复
+    if let Some(ready) = candidates.iter().find(|c| c.can_resume) {
+        return (ready.hourly_reset_ts, ready.hourly_window, true, Some(ready.email.clone()));
+    }
+
+    // 3. 所有账号均未到恢复状态：在周配额未受限的账号中，按 5 小时重置时间升序排列，取最早者
+    let mut hourly_candidates: Vec<&CandidateInfo> = candidates
+        .iter()
+        .filter(|c| !c.is_weekly_blocked && c.hourly_reset_ts.is_some())
+        .collect();
+
+    if !hourly_candidates.is_empty() {
+        hourly_candidates.sort_by(|a, b| {
+            let a_ts = a.hourly_reset_ts.unwrap();
+            let b_ts = b.hourly_reset_ts.unwrap();
+            a_ts.cmp(&b_ts)
+                .then_with(|| b.is_current.cmp(&a.is_current))
+        });
+
+        let earliest = hourly_candidates[0];
+        return (
+            earliest.hourly_reset_ts,
+            earliest.hourly_window,
+            false,
+            Some(earliest.email.clone()),
+        );
+    }
+
+    // 4. 若周配额均受限或无 5 小时重置时间，回退检查周重置时间
+    let mut weekly_candidates: Vec<&CandidateInfo> = candidates
+        .iter()
+        .filter(|c| c.weekly_reset_ts.is_some())
+        .collect();
+
+    if !weekly_candidates.is_empty() {
+        weekly_candidates.sort_by(|a, b| {
+            let a_ts = a.weekly_reset_ts.unwrap();
+            let b_ts = b.weekly_reset_ts.unwrap();
+            a_ts.cmp(&b_ts)
+                .then_with(|| b.is_current.cmp(&a.is_current))
+        });
+
+        let earliest = weekly_candidates[0];
+        return (
+            earliest.weekly_reset_ts,
+            earliest.hourly_window,
+            false,
+            Some(earliest.email.clone()),
+        );
+    }
+
+    // 5. 兜底回退
+    if let Some(curr) = current_account {
+        let (cur_reset, cur_window, cur_can) = get_current_codex_quota_resets_at();
+        (cur_reset, cur_window, cur_can, Some(curr.email.clone()))
+    } else {
+        (None, None, false, None)
+    }
+}
+
+/// 获取所有可用账号中最早的 5 小时配额重置时间戳（秒）、窗口时长、是否已有可用配额，以及最早重置的账号邮箱
+pub fn get_earliest_codex_quota_resets_at() -> (Option<i64>, Option<i64>, bool, Option<String>) {
+    let now_ts = Utc::now().timestamp();
+    let current_account = crate::modules::codex_account::get_current_account();
+    let accounts = crate::modules::codex_account::list_accounts();
+    let cfg = config::get_user_config();
+
+    let account_scope_mode = crate::modules::codex_account::normalize_auto_switch_account_scope_mode(
+        &cfg.codex_auto_switch_account_scope_mode,
+    );
+    let monitored_account_ids: Option<std::collections::HashSet<String>> = if cfg.codex_auto_switch_enabled
+        && account_scope_mode == "selected"
+    {
+        Some(
+            crate::modules::codex_account::resolve_monitored_auto_switch_account_ids(
+                &account_scope_mode,
+                &cfg.codex_auto_switch_selected_account_ids,
+                &accounts,
+            )
+            .into_iter()
+            .collect(),
+        )
+    } else {
+        None
+    };
+
+    compute_earliest_quota_reset_from_accounts(
+        now_ts,
+        current_account.as_ref(),
+        &accounts,
+        monitored_account_ids.as_ref(),
+    )
+}
+
 pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
     let mut tasks = Vec::new();
     let home = match dirs::home_dir() {
@@ -742,7 +919,8 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
     let hist_db = codex_home.join("thread_history_1.sqlite");
     let now_ts = Utc::now().timestamp();
     let mut seen_threads = std::collections::HashSet::new();
-    let (current_resets_at, current_window, current_can_resume) = get_current_codex_quota_resets_at();
+    let (earliest_resets_at, earliest_window, earliest_can_resume, earliest_account_email) =
+        get_earliest_codex_quota_resets_at();
 
     // 1. Check thread_goals in goals_1.sqlite
     if goals_db.exists() && state_db.exists() {
@@ -834,10 +1012,11 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                             model,
                             status: "usage_limited".to_string(),
                             error_message: error_msg,
-                            resets_at: current_resets_at,
-                            reset_window_minutes: current_window,
+                            resets_at: earliest_resets_at,
+                            reset_window_minutes: earliest_window,
+                            reset_account_email: earliest_account_email.clone(),
                             updated_at,
-                            can_resume: current_can_resume,
+                            can_resume: earliest_can_resume,
                             is_excluded: false,
                         });
                     }
@@ -900,10 +1079,11 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                                 model,
                                 status: "usage_limited".to_string(),
                                 error_message: error_msg,
-                                resets_at: current_resets_at,
-                                reset_window_minutes: current_window,
+                                resets_at: earliest_resets_at,
+                                reset_window_minutes: earliest_window,
+                                reset_account_email: earliest_account_email.clone(),
                                 updated_at,
-                                can_resume: current_can_resume,
+                                can_resume: earliest_can_resume,
                                 is_excluded: false,
                             });
                         }
@@ -941,15 +1121,17 @@ pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedCo
     let mut raw_tasks: Vec<InterruptedCodexTask> = serde_json::from_str(json_text)
         .map_err(|e| format!("解析远端任务 JSON 失败: {}", e))?;
 
-    let (current_resets_at, current_window, current_can_resume) = get_current_codex_quota_resets_at();
+    let (earliest_resets_at, earliest_window, earliest_can_resume, earliest_account_email) =
+        get_earliest_codex_quota_resets_at();
     for task in &mut raw_tasks {
         task.source = "ssh".to_string();
         task.server_id = Some(server.id.clone());
         task.server_name = Some(server.name.clone());
         task.id = format!("ssh:{}:{}", server.id, task.thread_id);
-        task.resets_at = current_resets_at;
-        task.reset_window_minutes = current_window;
-        task.can_resume = current_can_resume;
+        task.resets_at = earliest_resets_at;
+        task.reset_window_minutes = earliest_window;
+        task.reset_account_email = earliest_account_email.clone();
+        task.can_resume = earliest_can_resume;
     }
 
     Ok(raw_tasks)
@@ -982,16 +1164,18 @@ pub async fn detect_all_interrupted_tasks() -> Vec<InterruptedCodexTask> {
         }
     }
 
-    let (current_resets_at, current_window, current_can_resume) = get_current_codex_quota_resets_at();
+    let (earliest_resets_at, earliest_window, earliest_can_resume, earliest_account_email) =
+        get_earliest_codex_quota_resets_at();
     let excluded = load_excluded_task_ids();
     let dismissed = load_dismissed_task_ids();
 
     all_tasks.retain(|t| !dismissed.contains(&t.id) && !dismissed.contains(&t.thread_id));
 
     for task in &mut all_tasks {
-        task.resets_at = current_resets_at;
-        task.reset_window_minutes = current_window;
-        task.can_resume = current_can_resume;
+        task.resets_at = earliest_resets_at;
+        task.reset_window_minutes = earliest_window;
+        task.reset_account_email = earliest_account_email.clone();
+        task.can_resume = earliest_can_resume;
         task.is_excluded = excluded.contains(&task.id) || excluded.contains(&task.thread_id);
     }
 
@@ -1947,6 +2131,91 @@ mod tests {
         assert_eq!(candidates[0].account.id, "acc_positive");
         assert_eq!(candidates[1].account.id, "acc_early");
         assert_eq!(candidates[2].account.id, "acc_late");
+    }
+
+    #[test]
+    fn test_compute_earliest_quota_reset_from_accounts() {
+        let make_account_with_quota = |id: &str, email: &str, hourly_pct: i32, hourly_reset: Option<i64>, weekly_pct: i32, weekly_reset: Option<i64>| -> CodexAccount {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "email": email,
+                "user_id": null,
+                "plan_type": "plus",
+                "account_id": null,
+                "organization_id": null,
+                "tags": null,
+                "created_at": 100,
+                "last_used": 100,
+                "tokens": {
+                    "access_token": "token",
+                    "refresh_token": "refresh",
+                    "id_token": "id_token"
+                },
+                "quota": {
+                    "hourly_percentage": hourly_pct,
+                    "hourly_reset_time": hourly_reset,
+                    "hourly_window_minutes": 300,
+                    "weekly_percentage": weekly_pct,
+                    "weekly_reset_time": weekly_reset
+                }
+            }))
+            .unwrap()
+        };
+
+        let now_ts = 10000;
+        let acc_current = make_account_with_quota("acc_curr", "curr@example.com", 0, Some(20000), 100, Some(50000));
+        let acc_earlier = make_account_with_quota("acc_early", "early@example.com", 0, Some(14000), 100, Some(50000));
+        let acc_later = make_account_with_quota("acc_late", "late@example.com", 0, Some(25000), 100, Some(50000));
+
+        let accounts = vec![acc_current.clone(), acc_earlier.clone(), acc_later.clone()];
+
+        // Case 1: All accounts exhausted -> pick acc_earlier with earliest 5h reset
+        let (resets_at, window, can_resume, email) = compute_earliest_quota_reset_from_accounts(
+            now_ts,
+            Some(&acc_current),
+            &accounts,
+            None,
+        );
+        assert_eq!(resets_at, Some(14000));
+        assert_eq!(window, Some(300));
+        assert_eq!(can_resume, false);
+        assert_eq!(email, Some("early@example.com".to_string()));
+
+        // Case 2: acc_earlier is weekly blocked -> skip it, choose acc_current (20000 < 25000)
+        let acc_earlier_blocked = make_account_with_quota("acc_early", "early@example.com", 0, Some(14000), 0, Some(60000));
+        let accounts2 = vec![acc_current.clone(), acc_earlier_blocked, acc_later.clone()];
+        let (resets_at2, _, can_resume2, email2) = compute_earliest_quota_reset_from_accounts(
+            now_ts,
+            Some(&acc_current),
+            &accounts2,
+            None,
+        );
+        assert_eq!(resets_at2, Some(20000));
+        assert_eq!(can_resume2, false);
+        assert_eq!(email2, Some("curr@example.com".to_string()));
+
+        // Case 3: One account has positive quota -> can_resume = true
+        let acc_ready = make_account_with_quota("acc_ready", "ready@example.com", 50, Some(18000), 100, Some(60000));
+        let accounts3 = vec![acc_current.clone(), acc_ready.clone()];
+        let (_, _, can_resume3, email3) = compute_earliest_quota_reset_from_accounts(
+            now_ts,
+            Some(&acc_current),
+            &accounts3,
+            None,
+        );
+        assert_eq!(can_resume3, true);
+        assert_eq!(email3, Some("ready@example.com".to_string()));
+
+        // Case 4: One account reached reset time (now_ts >= 14000) -> can_resume = true
+        let (resets_at4, _, can_resume4, email4) = compute_earliest_quota_reset_from_accounts(
+            15000,
+            Some(&acc_current),
+            &accounts,
+            None,
+        );
+        assert_eq!(can_resume4, true);
+        assert_eq!(resets_at4, Some(14000));
+        assert_eq!(email4, Some("early@example.com".to_string()));
     }
 }
 

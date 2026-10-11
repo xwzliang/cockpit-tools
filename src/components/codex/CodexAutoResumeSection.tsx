@@ -203,17 +203,26 @@ export function CodexAutoResumeSection({
     return () => window.removeEventListener('focus', handleFocus);
   }, [loadData, resumingTaskId]);
 
-  // Listen to background auto-resume events
+  // Listen to background auto-resume and account switch events
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let unlistenResume: (() => void) | undefined;
+    let unlistenSwitch: (() => void) | undefined;
+
     listen('codex://task-auto-resumed', () => {
       void loadData(true);
     }).then((fn) => {
-      unlisten = fn;
+      unlistenResume = fn;
+    });
+
+    listen('codex://account-switched-for-earlier-reset', () => {
+      void loadData(true);
+    }).then((fn) => {
+      unlistenSwitch = fn;
     });
 
     return () => {
-      unlisten?.();
+      unlistenResume?.();
+      unlistenSwitch?.();
     };
   }, [loadData]);
 
@@ -649,6 +658,14 @@ export function CodexAutoResumeSection({
                             {t('codex.autoResume.resetTimeLabel', '预计重置时间: {{time}}', {
                               time: resetTimeStr,
                             })}
+                            {task.reset_account_email && (
+                              <span
+                                className="codex-task-card__reset-account"
+                                title={task.reset_account_email}
+                              >
+                                （{task.reset_account_email}）
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>

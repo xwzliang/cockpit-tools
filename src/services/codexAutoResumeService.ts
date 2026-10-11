@@ -16,6 +16,7 @@ export interface InterruptedCodexTask {
   error_message?: string | null;
   resets_at?: number | null;
   reset_window_minutes?: number | null;
+  reset_account_email?: string | null;
   updated_at: number;
   can_resume: boolean;
   is_excluded?: boolean;
