@@ -1679,7 +1679,14 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
                 let (_, _, quota_can_resume) = codex_auto_resume::get_current_codex_quota_resets_at();
                 let quota_zero = if let Some(acc) = crate::modules::codex_account::get_current_account() {
                     if let Some(ref q) = acc.quota {
-                        q.hourly_percentage <= 0
+                        if q.hourly_percentage <= 0 {
+                            match q.hourly_reset_time {
+                                Some(reset_ts) => Utc::now().timestamp() < reset_ts,
+                                None => true,
+                            }
+                        } else {
+                            false
+                        }
                     } else {
                         false
                     }
@@ -1734,7 +1741,14 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
         let (_, _, quota_can_resume) = codex_auto_resume::get_current_codex_quota_resets_at();
         let quota_exhausted = if let Some(acc) = crate::modules::codex_account::get_current_account() {
             if let Some(ref q) = acc.quota {
-                q.hourly_percentage <= 0
+                if q.hourly_percentage <= 0 {
+                    match q.hourly_reset_time {
+                        Some(reset_ts) => Utc::now().timestamp() < reset_ts,
+                        None => true,
+                    }
+                } else {
+                    false
+                }
             } else {
                 false
             }

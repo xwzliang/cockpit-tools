@@ -1525,6 +1525,19 @@ async fn run_codex_post_refresh_checks(app: &AppHandle) {
     }
 
     if !switched {
+        match crate::modules::codex_auto_resume::check_and_auto_switch_for_earlier_reset(app).await {
+            Ok(true) => {
+                switched = true;
+                logger::log_info("[AutoSwitch][Codex] 配额刷新后触发优先重置切号成功");
+            }
+            Ok(false) => {}
+            Err(e) => {
+                logger::log_warn(&format!("[AutoSwitch][Codex] 优先重置切号检查失败: {}", e));
+            }
+        }
+    }
+
+    if !switched {
         if let Err(e) = codex_account::run_quota_alert_if_needed() {
             logger::log_warn(&format!("[QuotaAlert][Codex] 预警检查失败: {}", e));
         }

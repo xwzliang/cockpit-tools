@@ -689,7 +689,7 @@ fn normalize_auto_switch_threshold(raw: i32) -> i32 {
     raw.clamp(0, 100)
 }
 
-fn normalize_auto_switch_account_scope_mode(raw: &str) -> String {
+pub(crate) fn normalize_auto_switch_account_scope_mode(raw: &str) -> String {
     let normalized = raw.trim().to_lowercase();
     if normalized == CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
         CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED.to_string()
@@ -711,7 +711,7 @@ fn normalize_auto_switch_selected_account_ids(raw: &[String]) -> Vec<String> {
     result
 }
 
-fn resolve_monitored_auto_switch_account_ids(
+pub(crate) fn resolve_monitored_auto_switch_account_ids(
     scope_mode: &str,
     selected_account_ids: &[String],
     accounts: &[CodexAccount],

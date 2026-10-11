@@ -1,3 +1,4 @@
+use crate::models::codex::CodexAccount;
 use crate::models::ssh_server::SshServer;
 use crate::modules::{config, logger, ssh_server};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -8,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
@@ -676,12 +678,27 @@ pub fn get_current_codex_quota_resets_at() -> (Option<i64>, Option<i64>, bool) {
         None => return (None, None, true),
     };
 
-    let hourly_exhausted = quota.hourly_percentage <= 0;
     let hourly_reset = quota.hourly_reset_time;
     let hourly_window = quota.hourly_window_minutes.or(Some(300));
-
-    let weekly_exhausted = quota.weekly_percentage <= 0;
     let weekly_reset = quota.weekly_reset_time;
+
+    let hourly_exhausted = if quota.hourly_percentage <= 0 {
+        match hourly_reset {
+            Some(reset_ts) => now_ts < reset_ts,
+            None => true,
+        }
+    } else {
+        false
+    };
+
+    let weekly_exhausted = if quota.weekly_percentage <= 0 {
+        match weekly_reset {
+            Some(reset_ts) => now_ts < reset_ts,
+            None => true,
+        }
+    } else {
+        false
+    };
 
     let mut is_blocked = false;
     let mut target_reset_ts: Option<i64> = None;
@@ -1209,10 +1226,288 @@ async fn resume_task_internal(
     }
 }
 
+static LAST_EARLIER_RESET_SWITCH_TS: OnceLock<Mutex<i64>> = OnceLock::new();
+static EARLIER_RESET_SWITCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug)]
+struct EarlierResetCandidate {
+    account: CodexAccount,
+    has_positive_quota: bool,
+    hourly_reset_time: i64,
+    hourly_percentage: i32,
+    last_used: i64,
+}
+
+/// 当所有账号用尽 5 小时配额且任务处于受限中断中时，
+/// 若其它账号的 5 小时重置时间早于当前账号且已到达，自动切换至该优先重置的账号以恢复任务。
+pub async fn check_and_auto_switch_for_earlier_reset(app: &AppHandle) -> Result<bool, String> {
+    let cfg = config::get_user_config();
+    if !cfg.codex_auto_resume_interrupted_tasks_enabled {
+        return Ok(false);
+    }
+
+    if EARLIER_RESET_SWITCH_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return Ok(false);
+    }
+
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            EARLIER_RESET_SWITCH_IN_PROGRESS.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = Guard;
+
+    let now_ts = Utc::now().timestamp();
+    {
+        let last_ts_mutex = LAST_EARLIER_RESET_SWITCH_TS.get_or_init(|| Mutex::new(0));
+        let last_ts = *last_ts_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        if now_ts - last_ts < 60 {
+            return Ok(false);
+        }
+    }
+
+    // 1. 检查是否存在待恢复的中断任务
+    let tasks = detect_all_interrupted_tasks().await;
+    let has_interrupted_tasks = tasks.iter().any(|t| !t.is_excluded);
+    if !has_interrupted_tasks {
+        return Ok(false);
+    }
+
+    // 2. 检查当前账号状态：若当前账号已可恢复，则无需切换
+    let current_account = match crate::modules::codex_account::get_current_account() {
+        Some(acc) => acc,
+        None => return Ok(false),
+    };
+
+    let (_resets_at, _window, current_can_resume) = get_current_codex_quota_resets_at();
+    if current_can_resume {
+        return Ok(false);
+    }
+
+    let current_reset_ts = current_account
+        .quota
+        .as_ref()
+        .and_then(|q| q.hourly_reset_time)
+        .unwrap_or(i64::MAX);
+
+    // 3. 收集候选账号
+    let accounts = crate::modules::codex_account::list_accounts();
+    let account_scope_mode = crate::modules::codex_account::normalize_auto_switch_account_scope_mode(
+        &cfg.codex_auto_switch_account_scope_mode,
+    );
+    let monitored_account_ids = if cfg.codex_auto_switch_enabled
+        && account_scope_mode == "selected"
+    {
+        crate::modules::codex_account::resolve_monitored_auto_switch_account_ids(
+            &account_scope_mode,
+            &cfg.codex_auto_switch_selected_account_ids,
+            &accounts,
+        )
+    } else {
+        accounts.iter().map(|a| a.id.clone()).collect()
+    };
+
+    let mut candidates: Vec<EarlierResetCandidate> = Vec::new();
+
+    for account in accounts {
+        if account.id == current_account.id {
+            continue;
+        }
+        if !monitored_account_ids.contains(&account.id) {
+            continue;
+        }
+        if account.is_api_key_auth()
+            || account.is_agent_identity_auth()
+            || account.is_web_session_auth()
+        {
+            continue;
+        }
+
+        let quota = match &account.quota {
+            Some(q) => q,
+            None => continue,
+        };
+
+        // 检查周配额是否受限
+        let weekly_blocked = if quota.weekly_percentage <= 0 {
+            match quota.weekly_reset_time {
+                Some(w_ts) => now_ts < w_ts,
+                None => true,
+            }
+        } else {
+            false
+        };
+        if weekly_blocked {
+            continue;
+        }
+
+        let hourly_pct = quota.hourly_percentage;
+        let hourly_reset = quota.hourly_reset_time;
+
+        let has_positive = hourly_pct > 0;
+        let is_eligible = if has_positive {
+            true
+        } else if let Some(reset_time) = hourly_reset {
+            reset_time <= now_ts && reset_time < current_reset_ts
+        } else {
+            false
+        };
+
+        if !is_eligible {
+            continue;
+        }
+
+        let effective_reset_ts = if has_positive {
+            0
+        } else {
+            hourly_reset.unwrap_or(i64::MAX)
+        };
+
+        candidates.push(EarlierResetCandidate {
+            account: account.clone(),
+            has_positive_quota: has_positive,
+            hourly_reset_time: effective_reset_ts,
+            hourly_percentage: hourly_pct,
+            last_used: account.last_used,
+        });
+    }
+
+    if candidates.is_empty() {
+        return Ok(false);
+    }
+
+    // 排序：正额度优先 -> 重置时间最早(升序) -> 额度百分比最高(降序) -> 最久未用(升序)
+    candidates.sort_by(|a, b| {
+        b.has_positive_quota
+            .cmp(&a.has_positive_quota)
+            .then_with(|| a.hourly_reset_time.cmp(&b.hourly_reset_time))
+            .then_with(|| b.hourly_percentage.cmp(&a.hourly_percentage))
+            .then_with(|| a.last_used.cmp(&b.last_used))
+    });
+
+    for cand in candidates {
+        let is_ready = if cand.hourly_percentage > 0 {
+            true
+        } else {
+            match crate::modules::codex_quota::refresh_account_quota(&cand.account.id).await {
+                Ok(refreshed) => {
+                    if refreshed.hourly_percentage > 0 {
+                        true
+                    } else if let Some(r_ts) = refreshed.hourly_reset_time {
+                        now_ts >= r_ts
+                    } else {
+                        false
+                    }
+                }
+                Err(err) => {
+                    logger::log_warn(&format!(
+                        "[CodexAutoResume] 刷新候选账号 {} 配额失败: {}",
+                        cand.account.id, err
+                    ));
+                    now_ts >= cand.hourly_reset_time + 60
+                }
+            }
+        };
+
+        if !is_ready {
+            continue;
+        }
+
+        logger::log_info(&format!(
+            "[CodexAutoResume] 发现优先重置配额账号，执行自动切号: 当前账号={}, 候选账号={}(reset_ts={})",
+            current_account.email, cand.account.email, cand.hourly_reset_time
+        ));
+
+        let switch_res = Box::pin(crate::commands::codex::switch_codex_account(
+            app.clone(),
+            cand.account.id.clone(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+
+        match switch_res {
+            Ok(switched) => {
+                {
+                    let last_ts_mutex = LAST_EARLIER_RESET_SWITCH_TS.get_or_init(|| Mutex::new(0));
+                    *last_ts_mutex.lock().unwrap_or_else(|e| e.into_inner()) = Utc::now().timestamp();
+                }
+
+                logger::log_info(&format!(
+                    "[CodexAutoResume] 优先重置切号成功: from={}, to={}",
+                    current_account.email, switched.email
+                ));
+
+                let title = "Codex 账号已自动切换";
+                let body = format!(
+                    "原账号仍需等待配额重置，已自动切换至优先重置的账号【{}】以恢复中断任务",
+                    switched.email
+                );
+
+                #[cfg(target_os = "macos")]
+                {
+                    let bundle_identifier = app.config().identifier.clone();
+                    let mut notification = mac_notification_sys::Notification::new();
+                    notification.title(title).message(&body);
+                    let _ = mac_notification_sys::set_application(&bundle_identifier);
+                    let _ = notification.send();
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(&body)
+                        .show();
+                }
+
+                let _ = app.emit(
+                    "codex://account-switched-for-earlier-reset",
+                    serde_json::json!({
+                        "fromAccountId": current_account.id,
+                        "fromAccountEmail": current_account.email,
+                        "toAccountId": switched.id,
+                        "toAccountEmail": switched.email,
+                    }),
+                );
+
+                return Ok(true);
+            }
+            Err(err) => {
+                logger::log_warn(&format!(
+                    "[CodexAutoResume] 切换至优先重置账号 {} 失败: {}",
+                    cand.account.id, err
+                ));
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 pub async fn check_and_auto_resume(app: &AppHandle) {
     let cfg = config::get_user_config();
     if !cfg.codex_auto_resume_interrupted_tasks_enabled {
         return;
+    }
+
+    let (_resets_at, _window, current_can_resume) = get_current_codex_quota_resets_at();
+    if !current_can_resume {
+        match check_and_auto_switch_for_earlier_reset(app).await {
+            Ok(true) => {
+                logger::log_info("[CodexAutoResume] 已自动切号至优先重置的账号，中断任务将在切号后恢复");
+                return;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                logger::log_warn(&format!("[CodexAutoResume] 优先重置切号检查失败: {}", e));
+            }
+        }
     }
 
     let tasks = detect_all_interrupted_tasks().await;
@@ -1594,5 +1889,65 @@ mod tests {
         assert!(stdout.contains("__CODEX_RESUME_RESULT_JSON_END__"));
         assert!(!stdout.contains("Expecting value: line 1 column 1"));
     }
+
+    #[test]
+    fn test_earlier_reset_candidate_sorting() {
+        let make_account = |id: &str, email: &str| -> CodexAccount {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "email": email,
+                "user_id": null,
+                "plan_type": "plus",
+                "account_id": null,
+                "organization_id": null,
+                "tags": null,
+                "created_at": 100,
+                "last_used": 100,
+                "tokens": {
+                    "access_token": "token",
+                    "refresh_token": "refresh",
+                    "id_token": "id_token"
+                }
+            }))
+            .unwrap()
+        };
+
+        let mut candidates = vec![
+            EarlierResetCandidate {
+                account: make_account("acc_late", "late@example.com"),
+                has_positive_quota: false,
+                hourly_reset_time: 18000,
+                hourly_percentage: 0,
+                last_used: 100,
+            },
+            EarlierResetCandidate {
+                account: make_account("acc_early", "early@example.com"),
+                has_positive_quota: false,
+                hourly_reset_time: 17000,
+                hourly_percentage: 0,
+                last_used: 200,
+            },
+            EarlierResetCandidate {
+                account: make_account("acc_positive", "positive@example.com"),
+                has_positive_quota: true,
+                hourly_reset_time: 0,
+                hourly_percentage: 80,
+                last_used: 300,
+            },
+        ];
+
+        candidates.sort_by(|a, b| {
+            b.has_positive_quota
+                .cmp(&a.has_positive_quota)
+                .then_with(|| a.hourly_reset_time.cmp(&b.hourly_reset_time))
+                .then_with(|| b.hourly_percentage.cmp(&a.hourly_percentage))
+                .then_with(|| a.last_used.cmp(&b.last_used))
+        });
+
+        assert_eq!(candidates[0].account.id, "acc_positive");
+        assert_eq!(candidates[1].account.id, "acc_early");
+        assert_eq!(candidates[2].account.id, "acc_late");
+    }
 }
+
 
