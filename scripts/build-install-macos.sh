@@ -138,6 +138,29 @@ ensure_build_dependencies() {
   printf 'Cargo: %s\n' "$(cargo --version)"
 }
 
+available_build_space_kib() {
+  local available=""
+  available="$(df -Pk "$REPO_ROOT" | awk 'NR == 2 {print $4}')" || die "Unable to check available build space."
+  [[ "$available" =~ ^[0-9]+$ ]] || die "Invalid available disk space reported by df: $available"
+  printf '%s\n' "$available"
+}
+
+ensure_build_space() {
+  local minimum_kib=$((10 * 1024 * 1024))
+  local available_kib=""
+  available_kib="$(available_build_space_kib)" || exit 1
+  log "Available build space: $((available_kib / 1024)) MiB (minimum: 10 GiB)"
+
+  if (( available_kib < minimum_kib )); then
+    log "Less than 10 GiB available; removing Cargo debug, incremental, and release artifacts"
+    # Clean generated output only. Installed applications and source files remain intact.
+    cargo clean --target-dir "$REPO_ROOT/target"
+    available_kib="$(available_build_space_kib)" || exit 1
+    log "Available space after cleanup: $((available_kib / 1024)) MiB"
+    (( available_kib >= minimum_kib )) || die "Less than 10 GiB remains after cleanup. Free additional disk space before building."
+  fi
+}
+
 detect_signing_identity() {
   if [[ -n "$SIGN_IDENTITY" ]]; then
     printf '%s\n' "$SIGN_IDENTITY"
@@ -192,6 +215,7 @@ load_common_paths
 ensure_build_dependencies
 
 cd "$REPO_ROOT"
+ensure_build_space
 
 log "Installing JavaScript dependencies"
 if [[ -f package-lock.json ]]; then
