@@ -439,14 +439,85 @@ print("__CODEX_AUTO_RESUME_JSON_END__")
 "#;
 
 const PYTHON_RESUME_HELPER: &str = r#"
-import socket, json, os, time, sqlite3, base64, sys, subprocess
+import socket, json, os, time, sqlite3, base64, sys, subprocess, struct, uuid
 from pathlib import Path
+
+def resume_desktop_owner(codex_home, thread_id, prompt):
+    ipc_path = codex_home / "ipc" / "ipc.sock"
+    if not ipc_path.exists():
+        return None
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(12)
+    owner_found = False
+    try:
+        sock.connect(str(ipc_path))
+        client_id = "uninitialized"
+        def read_exact(length):
+            data = bytearray()
+            while len(data) < length:
+                chunk = sock.recv(length - len(data))
+                if not chunk: raise EOFError("Desktop IPC closed")
+                data.extend(chunk)
+            return bytes(data)
+        def send(message):
+            data = json.dumps(message).encode("utf-8")
+            sock.sendall(struct.pack("<I", len(data)) + data)
+        def request(method, params, version=0, target=None):
+            request_id = str(uuid.uuid4())
+            message = {"type": "request", "requestId": request_id,
+                       "sourceClientId": client_id, "method": method,
+                       "params": params, "version": version, "timeoutMs": 10000}
+            if target: message["targetClientId"] = target
+            send(message)
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline:
+                sock.settimeout(max(0.1, deadline - time.monotonic()))
+                length = struct.unpack("<I", read_exact(4))[0]
+                if not 0 < length <= 16777216:
+                    raise ValueError("Invalid desktop IPC frame length")
+                reply = json.loads(read_exact(length))
+                if reply.get("type") == "client-discovery-request":
+                    send({"type": "client-discovery-response", "requestId": reply["requestId"],
+                          "response": {"canHandle": False}})
+                if reply.get("type") == "response" and reply.get("requestId") == request_id:
+                    return reply
+            raise TimeoutError("Desktop IPC request timed out")
+        initialized = request("initialize", {"clientType": "cockpit-tools"})
+        client_id = initialized["result"]["clientId"]
+        owner = request("thread-owner-discovery", {"hostId": "local", "conversationId": thread_id}, 1)
+        if owner.get("resultType") != "success":
+            return None
+        owner_found = True
+        reply = request("thread-follower-start-turn", {
+            "conversationId": thread_id,
+            "turnStart": {"request": {"threadId": thread_id,
+                "input": [{"type": "text", "text": prompt}]},
+                "context": {"inheritThreadSettings": True}}
+        }, 2, owner["handledByClientId"])
+        if reply.get("resultType") != "success":
+            return {"success": False, "mode": "desktop-ipc", "message": str(reply.get("error", "Desktop recovery rejected"))}
+        turn = reply.get("result", {}).get("result", {}).get("turn", {})
+        if not turn.get("id"):
+            return {"success": False, "mode": "desktop-ipc", "message": "Desktop did not acknowledge a new turn"}
+        return {"success": True, "mode": "desktop-ipc", "message": f"已通过桌面会话恢复任务: {thread_id}, turn={turn['id']}"}
+    except Exception as error:
+        if owner_found:
+            # A turn may have been accepted before a timeout. Never launch a
+            # second writer after contacting the existing desktop owner.
+            return {"success": False, "mode": "desktop-ipc", "message": str(error)}
+        return None
+    finally:
+        sock.close()
 
 def resume_thread(thread_id, is_goal, prompt, cwd=None, model=None):
     codex_home_env = os.environ.get("CODEX_HOME")
     codex_home = Path(codex_home_env) if codex_home_env else (Path.home() / ".codex")
     goals_db = codex_home / "goals_1.sqlite"
     sock_path = codex_home / "app-server-control" / "app-server-control.sock"
+
+    desktop_result = resume_desktop_owner(codex_home, thread_id, prompt)
+    if desktop_result is not None:
+        return desktop_result
 
     # 1. Update goals db if goal to make status active
     if is_goal and goals_db.exists():
@@ -1330,6 +1401,10 @@ async fn resume_task_internal(
                                 message: msg.to_string(),
                             });
                         }
+                        if val.get("mode").and_then(|v| v.as_str()) == Some("desktop-ipc") {
+                            return Err(val.get("message").and_then(|v| v.as_str())
+                                .unwrap_or("Desktop task recovery failed").to_string());
+                        }
                     }
                 }
             }
@@ -1414,6 +1489,9 @@ async fn resume_task_internal(
                         .get("message")
                         .and_then(|v| v.as_str())
                         .unwrap_or("远端 Python 执行失败");
+                    if val.get("mode").and_then(|v| v.as_str()) == Some("desktop-ipc") {
+                        return Err(err.to_string());
+                    }
                     logger::log_warn(&format!(
                         "[CodexAutoResume] 服务器【{}】Python 恢复未成功 ({})，尝试 CLI 降级: thread_id={}",
                         server.name, err, task.thread_id
@@ -1785,7 +1863,7 @@ try:
     row = db.execute("SELECT archived, rollout_path FROM threads WHERE id = ?", (thread,)).fetchone()
     db.close()
     if row and row[0]: result = "finished"
-    elif row and row[1] and since and result == "retry":
+    elif row and row[1] and since:
         with open(row[1], "rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 262144))
@@ -1800,7 +1878,11 @@ try:
                 if kind in ("task_complete", "task_completed", "turn_aborted"):
                     result = "finished"
                     break
-                if kind in ("task_started", "error"):
+                if kind == "task_started":
+                    result = "running"
+                    break
+                if kind == "error":
+                    result = "retry"
                     break
 except Exception: pass
 try:
@@ -2168,6 +2250,70 @@ mod tests {
         assert_eq!(restored.next_attempt_at, 2480);
     }
 
+    #[test]
+    fn auto_resume_regression_desktop_owner_recovery_uses_existing_writer() {
+        let definitions = PYTHON_RESUME_HELPER.split("def resume_thread(").next().unwrap();
+        let test = r#"
+import tempfile, threading
+for accepted in (True, False):
+    with tempfile.TemporaryDirectory() as root:
+        home = Path(root)
+        (home / 'ipc').mkdir()
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(home / 'ipc' / 'ipc.sock'))
+        server.listen(1)
+        requests = []
+        def serve():
+            peer, _ = server.accept()
+            def exact(n):
+                data = b''
+                while len(data) < n:
+                    chunk = peer.recv(n - len(data))
+                    if not chunk: raise EOFError()
+                    data += chunk
+                return data
+            for method in ('initialize', 'thread-owner-discovery', 'thread-follower-start-turn'):
+                message = json.loads(exact(struct.unpack('<I', exact(4))[0]))
+                requests.append(message)
+                assert message['method'] == method
+                result = {'clientId': 'client'} if method == 'initialize' else {}
+                if method == 'thread-follower-start-turn':
+                    assert message['version'] == 2
+                    assert message['targetClientId'] == 'owner'
+                    assert message['params']['turnStart']['request'] == {
+                        'threadId': 'thread', 'input': [{'type': 'text', 'text': 'Continue'}]}
+                    assert message['params']['turnStart']['context']['inheritThreadSettings']
+                    result = {'result': {'turn': {'id': 'new-turn', 'status': 'inProgress'}}}
+                reply = {'type': 'response', 'requestId': message['requestId'],
+                    'resultType': 'success', 'handledByClientId': 'owner', 'result': result}
+                if method == 'thread-follower-start-turn' and not accepted:
+                    reply.update(resultType='error', error='service unavailable')
+                data = json.dumps(reply).encode()
+                # Deliberately fragment the frame header and body.
+                frame = struct.pack('<I', len(data)) + data
+                peer.sendall(frame[:2]); peer.sendall(frame[2:7]); peer.sendall(frame[7:])
+            peer.close()
+        worker = threading.Thread(target=serve, daemon=True)
+        worker.start()
+        result = resume_desktop_owner(home, 'thread', 'Continue')
+        worker.join(timeout=5)
+        server.close()
+        assert not worker.is_alive()
+        assert len(requests) == 3
+        assert result['success'] == accepted, result
+        assert result['mode'] == 'desktop-ipc'
+        if not accepted: assert result['message'] == 'service unavailable'
+"#;
+        let mut child = std::process::Command::new("python3").arg("-")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        {
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(format!("{}\n{}", definitions, test).as_bytes()).unwrap();
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
     #[tokio::test]
     async fn auto_resume_regression_observes_execution_instead_of_launch_ack() {
         let dir = std::env::temp_dir().join(format!("cockpit-recovery-{}", uuid::Uuid::new_v4()));
@@ -2178,13 +2324,26 @@ mod tests {
         let now = Utc::now().timestamp();
         conn.execute("INSERT INTO thread_turns VALUES (?, 'completed', ?)", rusqlite::params![thread_id, (now - 100) * 1000]).unwrap();
         let encoded = BASE64_STANDARD.encode(serde_json::json!({"thread_id": thread_id, "since": now}).to_string());
-        for (status, started_at, expected) in [
-            ("completed", (now - 100) * 1000, "retry"),
-            ("inProgress", now * 1000, "running"),
-            ("failed", now * 1000, "retry"),
-            ("completed", now * 1000, "finished"),
-            ("cancelled", now * 1000, "finished"),
+        let state = rusqlite::Connection::open(dir.join("state_5.sqlite")).unwrap();
+        state.execute_batch("CREATE TABLE threads (id TEXT, archived INTEGER, rollout_path TEXT);").unwrap();
+        let rollout = dir.join("rollout.jsonl");
+        state.execute("INSERT INTO threads VALUES (?, 0, ?)", rusqlite::params![thread_id, rollout.to_str().unwrap()]).unwrap();
+        for (status, started_at, rollout_kind, expected) in [
+            ("completed", (now - 100) * 1000, "", "retry"),
+            ("inProgress", now * 1000, "", "running"),
+            ("failed", now * 1000, "", "retry"),
+            ("completed", now * 1000, "", "finished"),
+            ("cancelled", now * 1000, "", "finished"),
+            // New desktop versions no longer update the older history database.
+            ("interrupted", (now - 100) * 1000, "task_started", "running"),
+            ("inProgress", (now - 100) * 1000, "task_complete", "finished"),
+            ("inProgress", (now - 100) * 1000, "error", "retry"),
         ] {
+            let line = if rollout_kind.is_empty() { String::new() } else {
+                serde_json::json!({"timestamp": Utc::now().to_rfc3339(),
+                    "type": "event_msg", "payload": {"type": rollout_kind}}).to_string()
+            };
+            std::fs::write(&rollout, line).unwrap();
             conn.execute("UPDATE thread_turns SET status = ?, started_at = ?", rusqlite::params![status, started_at]).unwrap();
             let mut child = std::process::Command::new("python3")
                 .args(["-", &encoded]).env("CODEX_HOME", &dir)
@@ -2198,6 +2357,7 @@ mod tests {
             assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), format!("__RECOVERY_PROGRESS__{}", expected));
         }
         drop(conn);
+        drop(state);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
