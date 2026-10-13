@@ -780,37 +780,48 @@ def resume():
     agentapis = [home / folder / 'bin/agentapi' for folder in ('antigravity', 'antigravity-cli')]
     agentapi = next((str(p) for p in agentapis if p.is_file() and os.access(p, os.X_OK)), None)
     if agentapi:
-        ports = []
-        csrf_by_pid = {}
-        try:
-            processes = subprocess.run(['ps', '-axww', '-o', 'pid=,command='], capture_output=True, text=True, errors='replace', timeout=5)
-            for line in processes.stdout.splitlines():
-                if 'language_server' not in line: continue
-                try: command = shlex.split(line)
-                except ValueError: continue
-                for i, arg in enumerate(command):
-                    if arg == '--csrf_token' and i + 1 < len(command):
-                        csrf_by_pid[command[0]] = command[i + 1]
-                    elif arg.startswith('--csrf_token='):
-                        csrf_by_pid[command[0]] = arg.split('=', 1)[1]
-            out = subprocess.run([shutil.which('lsof') or '/usr/sbin/lsof', '-iTCP', '-sTCP:LISTEN', '-n', '-P'], capture_output=True, text=True, errors='replace', timeout=5)
-            for line in out.stdout.splitlines():
-                if 'language_' in line or 'language_server' in line:
-                    for word in line.split():
-                        if word.startswith('127.0.0.1:'):
-                            columns = line.split()
-                            ports.append((word.rsplit(':', 1)[1], csrf_by_pid.get(columns[1])))
-        except Exception: pass
-        for port, csrf in dict.fromkeys(ports):
-            if not port.isdigit(): continue
-            env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS='localhost:' + port)
-            if csrf: env['ANTIGRAVITY_CSRF_TOKEN'] = csrf
-            probe = subprocess.run([agentapi, 'get-conversation-metadata', cid], env=env, capture_output=True, text=True, timeout=5)
-            if probe.returncode: continue
-            out = subprocess.run([agentapi, 'send-message', cid, prompt], env=env, capture_output=True, text=True, timeout=10)
-            if out.returncode:
-                return {'success': False, 'message': out.stderr.strip() or 'Antigravity API rejected recovery'}
-            return {'success': True, 'message': 'Restored through running Antigravity API'}
+        deadline = time.monotonic() + 90
+        last_error = "desktop API is not ready"
+        while time.monotonic() < deadline:
+            ports = []
+            csrf_by_pid = {}
+            try:
+                processes = subprocess.run(['ps', '-axww', '-o', 'pid=,command='], capture_output=True, text=True, errors='replace', timeout=5)
+                for line in processes.stdout.splitlines():
+                    if 'language_server' not in line: continue
+                    try: command = shlex.split(line)
+                    except ValueError: continue
+                    for i, arg in enumerate(command):
+                        if arg == '--csrf_token' and i + 1 < len(command):
+                            csrf_by_pid[command[0]] = command[i + 1]
+                        elif arg.startswith('--csrf_token='):
+                            csrf_by_pid[command[0]] = arg.split('=', 1)[1]
+                out = subprocess.run([shutil.which('lsof') or '/usr/sbin/lsof', '-iTCP', '-sTCP:LISTEN', '-n', '-P'], capture_output=True, text=True, errors='replace', timeout=5)
+                for line in out.stdout.splitlines():
+                    if 'language_' in line or 'language_server' in line:
+                        for word in line.split():
+                            if word.startswith('127.0.0.1:'):
+                                columns = line.split()
+                                ports.append((word.rsplit(':', 1)[1], csrf_by_pid.get(columns[1])))
+            except Exception as error: last_error = type(error).__name__
+            for port, csrf in dict.fromkeys(ports):
+                if not port.isdigit(): continue
+                env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS='localhost:' + port)
+                if csrf: env['ANTIGRAVITY_CSRF_TOKEN'] = csrf
+                try:
+                    probe = subprocess.run([agentapi, 'get-conversation-metadata', cid], env=env, capture_output=True, text=True, errors='replace', timeout=5)
+                except subprocess.TimeoutExpired:
+                    last_error = 'desktop API metadata probe timed out'
+                    continue
+                if probe.returncode:
+                    last_error = "desktop API metadata probe failed"
+                    continue
+                out = subprocess.run([agentapi, 'send-message', cid, prompt], env=env, capture_output=True, text=True, timeout=10)
+                if out.returncode:
+                    return {'success': False, 'message': out.stderr.strip() or 'Antigravity API rejected recovery'}
+                return {'success': True, 'message': 'Restored through running Antigravity API'}
+            time.sleep(2)
+        return {'success': False, 'message': 'Antigravity desktop API was not ready within 90 seconds: ' + last_error}
     candidates = [shutil.which('agy'), str(Path.home() / '.local/bin/agy'),
         '/opt/homebrew/bin/agy', '/usr/local/bin/agy',
         '/Applications/Antigravity.app/Contents/Resources/app/bin/agy']
@@ -843,7 +854,7 @@ async fn resume_remote_task(
     use base64::{engine::general_purpose::STANDARD, Engine};
     let encoded = STANDARD.encode(serde_json::json!({"thread_id": thread_id, "prompt": prompt}).to_string());
     let script = ssh_server::remote_python_with_home(PYTHON_REMOTE_RESUME, "ANTIGRAVITY_HOME", &server.antigravity_home);
-    let output = ssh_server::run_ssh(server, 30, &["python3", "-", &encoded], Some(script)).await?;
+    let output = ssh_server::run_ssh(server, 120, &["python3", "-", &encoded], Some(script)).await?;
     let json = output.lines().find_map(|line| line.strip_prefix("__ANTIGRAVITY_RESUME_RESULT__"))
         .ok_or_else(|| format!("Antigravity recovery did not return a result on {}", server.name))?;
     let result: ResumeTaskResult = serde_json::from_str(json).map_err(|err| err.to_string())?;
@@ -1124,7 +1135,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         let agentapi = dir.join("antigravity/bin/agentapi");
         std::fs::write(&agentapi, "#!/bin/sh\n[ \"$ANTIGRAVITY_LS_ADDRESS\" = localhost:54321 ] || exit 9\n[ \"$ANTIGRAVITY_CSRF_TOKEN\" = fixture-secret ] || exit 8\nexit 0\n").unwrap();
-        std::fs::write(dir.join("bin/lsof"), "#!/bin/sh\necho 'language_server 1 user TCP 127.0.0.1:54321 LISTEN'\n").unwrap();
+        std::fs::write(dir.join("bin/lsof"), "#!/bin/sh\nif [ ! -f \"$ANTIGRAVITY_HOME/probed\" ]; then touch \"$ANTIGRAVITY_HOME/probed\"; exit 0; fi\necho 'language_server 1 user TCP 127.0.0.1:54321 LISTEN'\n").unwrap();
         std::fs::write(dir.join("bin/agy"), "#!/bin/sh\nexit 5\n").unwrap();
         std::fs::write(dir.join("bin/ps"), "#!/bin/sh\necho '1 /Applications/Antigravity.app/Contents/Resources/bin/language_server --csrf_token fixture-secret'\n").unwrap();
         #[cfg(unix)] {

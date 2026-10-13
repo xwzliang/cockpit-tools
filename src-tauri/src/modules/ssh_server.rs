@@ -1061,6 +1061,9 @@ fn build_antigravity_bundle_hash(files: &[AntigravityProjectionFile]) -> String 
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     for file in files {
+        // Delivery metadata changes every sync; only credential files determine
+        // whether the running desktop needs a new account projection.
+        if file.relative_path == ".cockpit_antigravity_auth.json" { continue; }
         hasher.update(file.relative_path.as_bytes());
         hasher.update(b"\0");
         hasher.update(file.sha256.as_bytes());
@@ -1385,6 +1388,24 @@ if [ "$(uname -s)" = "Darwin" ]; then
     for pid in $pids; do
       if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" || exit 1; fi
     done
+    python3 - "${1:-~/.gemini}" <<'ACK_PY'
+import json, os, pathlib, tempfile
+home = pathlib.Path(os.path.expanduser(os.path.expandvars(__import__('sys').argv[1])))
+marker = home / '.cockpit_antigravity_auth.json'
+storage = pathlib.Path.home() / 'Library/Application Support/Antigravity/app_storage.json'
+if marker.exists() and storage.exists():
+    email = json.loads(marker.read_text()).get('account_email')
+    data = json.loads(storage.read_text())
+    if email and data.get('jetski.onboarding.lastLoginUsername') and data.get('jetski.onboarding.lastLoginIsGcpTos') in ('true', 'false'):
+        data['jetski.onboarding.lastLoginUsername'] = email
+        fd, temporary = tempfile.mkstemp(dir=storage.parent, prefix='.cockpit-ack-')
+        try:
+            with os.fdopen(fd, 'w') as output:
+                json.dump(data, output, ensure_ascii=False)
+            os.replace(temporary, storage)
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+ACK_PY
     open -n -a "$app" || exit 1
     new_pids=""
     for attempt in 1 2 3 4 5; do
@@ -1463,7 +1484,7 @@ async fn reload_remote_antigravity_server(server: &SshServer) -> Result<(), Stri
     let output = run_ssh(
         server,
         APP_SERVER_RELOAD_TIMEOUT_SECS,
-        &["sh", "-s"],
+        &["sh", "-s", "--", &server.antigravity_home],
         Some(reload_antigravity_script().to_string()),
     )
     .await
@@ -1622,6 +1643,19 @@ mod tests {
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    #[test]
+    fn antigravity_auth_hash_ignores_sync_time_but_tracks_credentials() {
+        let mut files = vec![
+            AntigravityProjectionFile { relative_path: "jetski-standalone-oauth-token".into(), mode: 0o600, sha256: "token-a".into(), content: String::new() },
+            AntigravityProjectionFile { relative_path: ".cockpit_antigravity_auth.json".into(), mode: 0o600, sha256: "time-a".into(), content: String::new() },
+        ];
+        let first = build_antigravity_bundle_hash(&files);
+        files[1].sha256 = "time-b".into();
+        assert_eq!(first, build_antigravity_bundle_hash(&files));
+        files[0].sha256 = "token-b".into();
+        assert_ne!(first, build_antigravity_bundle_hash(&files));
     }
 
     #[test]
