@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshServerStore {
     pub version: String,
+    #[serde(default)]
+    pub selected_antigravity_server_id: Option<String>,
     pub selected_server_id: Option<String>,
     pub servers: Vec<SshServer>,
 }
@@ -12,6 +14,7 @@ impl Default for SshServerStore {
         Self {
             version: "1".to_string(),
             selected_server_id: None,
+            selected_antigravity_server_id: None,
             servers: Vec::new(),
         }
     }

@@ -16,7 +16,7 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 const SSH_SERVERS_FILE: &str = "ssh_servers.json";
-const STORE_VERSION: &str = "1";
+const STORE_VERSION: &str = "2";
 /// TCP/SSH 握手超时（传给 OpenSSH ConnectTimeout）
 const CONNECTION_TIMEOUT_SECS: u64 = 12;
 /// 测连整段命令墙钟超时
@@ -29,6 +29,7 @@ const APP_SERVER_RELOAD_TIMEOUT_SECS: u64 = 20;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshServerList {
     pub selected_server_id: Option<String>,
+    pub selected_antigravity_server_id: Option<String>,
     pub servers: Vec<SshServer>,
 }
 
@@ -315,7 +316,25 @@ pub fn load_store() -> Result<SshServerStore, String> {
             store.selected_server_id = None;
         }
     }
+    if store.version != STORE_VERSION {
+        // Preserve the legacy selection for each enabled platform; recover a unique
+        // enabled host if the other platform displaced the shared selection.
+        store.selected_antigravity_server_id = migrate_selection(&store, true);
+        store.selected_server_id = migrate_selection(&store, false);
+        store.version = STORE_VERSION.to_string();
+        save_store(&store)?;
+    }
     Ok(store)
+}
+
+fn migrate_selection(store: &SshServerStore, antigravity: bool) -> Option<String> {
+    let enabled = |server: &&SshServer| if antigravity { server.sync_on_antigravity_switch } else { server.sync_on_codex_switch };
+    if let Some(server) = store.servers.iter().find(|s| Some(&s.id) == store.selected_server_id.as_ref()).filter(enabled) {
+        return Some(server.id.clone());
+    }
+    let mut candidates = store.servers.iter().filter(enabled);
+    let first = candidates.next()?;
+    if candidates.next().is_none() { Some(first.id.clone()) } else { None }
 }
 
 fn save_store(store: &SshServerStore) -> Result<(), String> {
@@ -329,6 +348,7 @@ pub fn list_servers() -> Result<SshServerList, String> {
     let store = load_store()?;
     Ok(SshServerList {
         selected_server_id: store.selected_server_id,
+        selected_antigravity_server_id: store.selected_antigravity_server_id,
         servers: store.servers,
     })
 }
@@ -352,6 +372,7 @@ pub fn delete_server(server_id: &str) -> Result<SshServerList, String> {
     let mut store = load_store()?;
     let server_id = server_id.trim();
     store.servers.retain(|server| server.id != server_id);
+    if store.selected_antigravity_server_id.as_deref() == Some(server_id) { store.selected_antigravity_server_id = None; }
     if store.selected_server_id.as_deref() == Some(server_id) {
         store.selected_server_id = None;
     }
@@ -359,7 +380,7 @@ pub fn delete_server(server_id: &str) -> Result<SshServerList, String> {
     list_servers()
 }
 
-pub fn select_server(server_id: Option<String>) -> Result<SshServerList, String> {
+pub fn select_server(server_id: Option<String>, platform: Option<String>) -> Result<SshServerList, String> {
     let mut store = load_store()?;
     let selected = server_id.and_then(|value| {
         let trimmed = value.trim().to_string();
@@ -374,7 +395,11 @@ pub fn select_server(server_id: Option<String>) -> Result<SshServerList, String>
             return Err(format!("SSH server not found: {}", selected_id));
         }
     }
-    store.selected_server_id = selected;
+    match platform.as_deref().unwrap_or("codex") {
+        "codex" => store.selected_server_id = selected,
+        "antigravity" => store.selected_antigravity_server_id = selected,
+        other => return Err(format!("Unknown SSH platform: {}", other)),
+    }
     save_store(&store)?;
     list_servers()
 }
@@ -1526,7 +1551,7 @@ pub async fn sync_current_antigravity_account_to_server(
             .cloned()
             .ok_or_else(|| format!("SSH server not found: {}", server_id))?
     } else {
-        selected_server_from_store(&store)
+        store.selected_antigravity_server_id.as_ref().and_then(|id| store.servers.iter().find(|s| &s.id == id)).cloned()
             .ok_or_else(|| "ssh_not_configured: no selected SSH server".to_string())?
     };
     Ok(sync_antigravity_account_to_server(server, &account).await)
@@ -1542,7 +1567,7 @@ pub async fn sync_selected_server_after_antigravity_switch(
             return None;
         }
     };
-    let server = selected_server_from_store(&store)?;
+    let server = store.selected_antigravity_server_id.as_ref().and_then(|id| store.servers.iter().find(|s| &s.id == id)).cloned()?;
     if !server.sync_on_antigravity_switch {
         return None;
     }
@@ -1597,6 +1622,19 @@ mod tests {
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    #[test]
+    fn platform_selection_migrates_displaced_codex_host() {
+        let mut codex = valid_server();
+        codex.id = "codex".into();
+        let mut ag = codex.clone();
+        ag.id = "ag".into();
+        ag.sync_on_codex_switch = false;
+        ag.sync_on_antigravity_switch = true;
+        let store = SshServerStore { selected_server_id: Some("ag".into()), servers: vec![codex, ag], ..Default::default() };
+        assert_eq!(migrate_selection(&store, false).as_deref(), Some("codex"));
+        assert_eq!(migrate_selection(&store, true).as_deref(), Some("ag"));
     }
 
     #[test]
@@ -1892,6 +1930,7 @@ compile(writers[0], 'generated-keychain-writer.py', 'exec')
         let store = SshServerStore {
             version: STORE_VERSION.to_string(),
             selected_server_id: Some(server.id.clone()),
+            selected_antigravity_server_id: None,
             servers: vec![server.clone()],
         };
         save_store(&store).expect("write live SSH server store");

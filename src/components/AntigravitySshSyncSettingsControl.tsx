@@ -19,7 +19,7 @@ export function AntigravitySshSyncSettingsControl({
 }: AntigravitySshSyncSettingsControlProps) {
   const { t } = useTranslation();
   const servers = useSshServerStore((s) => s.servers);
-  const selectedServerId = useSshServerStore((s) => s.selectedServerId);
+  const selectedServerId = useSshServerStore((s) => s.selectedAntigravityServerId);
   const fetchServers = useSshServerStore((s) => s.fetchServers);
   const upsertServer = useSshServerStore((s) => s.upsertServer);
   const [modalOpen, setModalOpen] = useState(false);
@@ -134,7 +134,7 @@ export function AntigravitySshSyncSettingsControl({
           </div>
         </div>
         <div className="qs-hint">{hintText}</div>
-        <CodexSshSyncModal open={modalOpen} onClose={closeModal} />
+        <CodexSshSyncModal platform="antigravity" open={modalOpen} onClose={closeModal} />
       </>
     );
   }
@@ -166,7 +166,7 @@ export function AntigravitySshSyncSettingsControl({
           </label>
         </div>
       </div>
-      <CodexSshSyncModal open={modalOpen} onClose={closeModal} />
+      <CodexSshSyncModal platform="antigravity" open={modalOpen} onClose={closeModal} />
     </>
   );
 }

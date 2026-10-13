@@ -19,8 +19,8 @@ pub fn delete_ssh_server(server_id: String) -> Result<SshServerList, String> {
 }
 
 #[tauri::command]
-pub fn select_ssh_server(server_id: Option<String>) -> Result<SshServerList, String> {
-    ssh_server::select_server(server_id)
+pub fn select_ssh_server(server_id: Option<String>, platform: Option<String>) -> Result<SshServerList, String> {
+    ssh_server::select_server(server_id, platform)
 }
 
 #[tauri::command]

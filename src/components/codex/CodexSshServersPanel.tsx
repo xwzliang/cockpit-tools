@@ -90,26 +90,31 @@ function formatSyncTime(timestamp?: number) {
 interface CodexSshServersPanelProps {
   /** 嵌入设置弹框时隐藏顶部大标题区 */
   embedded?: boolean;
+  platform?: "codex" | "antigravity";
 }
 
-export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelProps) {
+export function CodexSshServersPanel({ embedded = false, platform = "codex" }: CodexSshServersPanelProps) {
   const { t } = useTranslation();
   const {
     servers,
-    selectedServerId,
+    selectedServerId: codexSelectedId,
+    selectedAntigravityServerId,
     loading,
     error,
     lastSyncResult,
     fetchServers,
     upsertServer,
     deleteServer,
-    selectServer,
+    selectServer: selectPlatformServer,
     testConnection,
     syncNow,
     syncAntigravityNow,
     applySyncResult,
   } = useSshServerStore();
-  const [form, setForm] = useState<FormState>(emptyForm);
+  const selectedServerId = platform === "antigravity" ? selectedAntigravityServerId : codexSelectedId;
+  const selectServer = (id: string | null) => selectPlatformServer(id, platform);
+  const platformEmptyForm = { ...emptyForm, syncOnSwitch: platform === "codex", syncOnAntigravitySwitch: platform === "antigravity" };
+  const [form, setForm] = useState<FormState>(platformEmptyForm);
   const [configHosts, setConfigHosts] = useState<string[]>([]);
   const [customAlias, setCustomAlias] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -167,7 +172,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
       const draft = draftFromForm(form);
       await upsertServer(draft);
       // 开启任一切号同步时自动选中该服务器，设置里的开关会点亮
-      if (draft.sync_on_codex_switch || draft.sync_on_antigravity_switch) {
+      if (platform === "codex" ? draft.sync_on_codex_switch : draft.sync_on_antigravity_switch) {
         const list = useSshServerStore.getState().servers;
         const matched =
           list.find(
@@ -180,7 +185,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
           await selectServer(matched.id);
         }
       }
-      setForm(emptyForm);
+      setForm(platformEmptyForm);
       setLocalMessage({ kind: 'success', text: t('common.saved', '已保存') });
     } catch (err) {
       setLocalMessage({ kind: 'error', text: String(err) });
@@ -315,7 +320,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                   type="button"
                   title={t('common.cancel', '取消')}
                   aria-label={t('common.cancel', '取消')}
-                  onClick={() => setForm(emptyForm)}
+                  onClick={() => setForm(platformEmptyForm)}
                 >
                   <X size={14} />
                 </button>
@@ -524,7 +529,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
               <button
                 className="btn btn-secondary"
                 type="button"
-                onClick={() => setForm(emptyForm)}
+                onClick={() => setForm(platformEmptyForm)}
               >
                 {t('common.cancel', '取消')}
               </button>

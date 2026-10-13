@@ -38,8 +38,8 @@ export async function deleteSshServer(serverId: string): Promise<SshServerList> 
   return await invoke('delete_ssh_server', { serverId });
 }
 
-export async function selectSshServer(serverId: string | null): Promise<SshServerList> {
-  return await invoke('select_ssh_server', { serverId });
+export async function selectSshServer(serverId: string | null, platform: "codex" | "antigravity" = "codex"): Promise<SshServerList> {
+  return await invoke('select_ssh_server', { serverId, platform });
 }
 
 export async function testSshServerConnection(serverId: string): Promise<string> {

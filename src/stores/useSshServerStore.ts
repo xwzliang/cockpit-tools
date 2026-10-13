@@ -10,6 +10,7 @@ import type {
 interface SshServerState {
   servers: SshServer[];
   selectedServerId: string | null;
+  selectedAntigravityServerId: string | null;
   loading: boolean;
   error: string | null;
   lastSyncResult: SshCodexSyncResult | null;
@@ -17,7 +18,7 @@ interface SshServerState {
   fetchServers: () => Promise<void>;
   upsertServer: (draft: SshServerDraft) => Promise<void>;
   deleteServer: (serverId: string) => Promise<void>;
-  selectServer: (serverId: string | null) => Promise<void>;
+  selectServer: (serverId: string | null, platform?: "codex" | "antigravity") => Promise<void>;
   testConnection: (serverId: string) => Promise<string>;
   syncNow: (serverId?: string | null) => Promise<SshCodexSyncResult>;
   syncAntigravityNow: (serverId?: string | null) => Promise<SshAntigravitySyncResult>;
@@ -34,6 +35,7 @@ function selectedIdFromList(selectedServerId: string | null, servers: SshServer[
 export const useSshServerStore = create<SshServerState>((set, get) => ({
   servers: [],
   selectedServerId: null,
+  selectedAntigravityServerId: null,
   loading: false,
   error: null,
   lastSyncResult: null,
@@ -46,6 +48,7 @@ export const useSshServerStore = create<SshServerState>((set, get) => ({
       set({
         servers: list.servers,
         selectedServerId: selectedIdFromList(list.selected_server_id, list.servers),
+      selectedAntigravityServerId: selectedIdFromList(list.selected_antigravity_server_id, list.servers),
         loading: false,
       });
     } catch (error) {
@@ -58,6 +61,7 @@ export const useSshServerStore = create<SshServerState>((set, get) => ({
     set({
       servers: list.servers,
       selectedServerId: selectedIdFromList(list.selected_server_id, list.servers),
+      selectedAntigravityServerId: selectedIdFromList(list.selected_antigravity_server_id, list.servers),
       error: null,
     });
   },
@@ -67,15 +71,17 @@ export const useSshServerStore = create<SshServerState>((set, get) => ({
     set({
       servers: list.servers,
       selectedServerId: selectedIdFromList(list.selected_server_id, list.servers),
+      selectedAntigravityServerId: selectedIdFromList(list.selected_antigravity_server_id, list.servers),
       error: null,
     });
   },
 
-  selectServer: async (serverId) => {
-    const list = await sshServerService.selectSshServer(serverId);
+  selectServer: async (serverId, platform) => {
+    const list = await sshServerService.selectSshServer(serverId, platform);
     set({
       servers: list.servers,
       selectedServerId: selectedIdFromList(list.selected_server_id, list.servers),
+      selectedAntigravityServerId: selectedIdFromList(list.selected_antigravity_server_id, list.servers),
       error: null,
     });
   },
@@ -93,7 +99,7 @@ export const useSshServerStore = create<SshServerState>((set, get) => ({
 
   syncAntigravityNow: async (serverId) => {
     const result = await sshServerService.syncCurrentAntigravityAccountToSshServer(
-      serverId ?? get().selectedServerId,
+      serverId ?? get().selectedAntigravityServerId,
     );
     get().applyAntigravitySyncResult(result);
     void get().fetchServers();

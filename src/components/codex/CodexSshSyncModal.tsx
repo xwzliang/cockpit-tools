@@ -6,6 +6,7 @@ import { CodexSshServersPanel } from './CodexSshServersPanel';
 
 interface CodexSshSyncModalProps {
   open: boolean;
+  platform?: "codex" | "antigravity";
   onClose: () => void;
 }
 
@@ -14,7 +15,7 @@ interface CodexSshSyncModalProps {
  * 通过 portal 挂到 body，避免被快捷设置/设置页祖先 transform 限制宽度。
  * 仅可通过关闭按钮 / Esc 关闭（不点遮罩关闭）。
  */
-export function CodexSshSyncModal({ open, onClose }: CodexSshSyncModalProps) {
+export function CodexSshSyncModal({ open, onClose, platform = "codex" }: CodexSshSyncModalProps) {
   const { t } = useTranslation();
   useEscClose(open, onClose);
 
@@ -57,7 +58,7 @@ export function CodexSshSyncModal({ open, onClose }: CodexSshSyncModalProps) {
         </div>
 
         <div className="codex-ssh-sync-modal__body">
-          <CodexSshServersPanel embedded />
+          <CodexSshServersPanel embedded platform={platform} />
         </div>
 
         <div className="codex-ssh-sync-modal__footer">

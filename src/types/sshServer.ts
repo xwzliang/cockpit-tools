@@ -51,6 +51,7 @@ export interface SshServer {
 
 export interface SshServerList {
   selected_server_id: string | null;
+  selected_antigravity_server_id: string | null;
   servers: SshServer[];
 }
 
