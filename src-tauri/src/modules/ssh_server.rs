@@ -1113,28 +1113,25 @@ pub fn build_antigravity_projection_bundle(
 
 const MACOS_KEYCHAIN_GUI_SCRIPT: &str = r#"
 if [ "$(uname -s)" = "Darwin" ]; then
-  if ! security add-generic-password -U -s gemini -a antigravity -w 'go-keyring-base64:__PAYLOAD__' -A >/dev/null 2>&1; then
-    python3 - '__PAYLOAD__' <<'KEYCHAIN_GUI_PY'
-import os,sys,time,tempfile,pathlib,plistlib,subprocess,shutil,uuid
+  # SSH has a different security session; always write in the desktop session.
+  python3 - '__PAYLOAD__' <<'KEYCHAIN_GUI_PY'
+import os,sys,time,tempfile,pathlib,plistlib,subprocess,shutil,uuid,json
 with tempfile.TemporaryDirectory(prefix='cockpit-keychain-') as root:
     folder=pathlib.Path(root)
     label='com.cockpit.antigravity-auth.' + str(uuid.uuid4())
     runner=folder/'runner.py'
     runner.write_text('''import subprocess,sys,pathlib,json
 args=sys.argv[2:]
+# Match the local macOS switch: replace the item rather than modifying its ACL.
+subprocess.run([args[0],"delete-generic-password","-s","gemini","-a","antigravity"],capture_output=True,text=True)
 result=subprocess.run(args,capture_output=True,text=True)
-if result.returncode and "-U" in args:
-    deleted=subprocess.run([args[0],"delete-generic-password","-s","gemini","-a","antigravity"],capture_output=True,text=True)
-    if deleted.returncode==0:
-        args.remove("-U")
-        result=subprocess.run(args,capture_output=True,text=True)
-pathlib.Path(sys.argv[1]).write_text(str(result.returncode))
+pathlib.Path(sys.argv[1]).write_text(json.dumps({"code":result.returncode,"error":result.stderr}))
 sys.exit(result.returncode)
 ''')
     runner.chmod(0o700)
     result=folder/'result'
     program=[sys.executable,str(runner),str(result),shutil.which('security') or '/usr/bin/security',
-        'add-generic-password','-U','-s','gemini','-a','antigravity','-w','go-keyring-base64:'+sys.argv[1],'-A']
+        'add-generic-password','-s','gemini','-a','antigravity','-w','go-keyring-base64:'+sys.argv[1],'-A']
     plist=folder/'job.plist'
     plist.write_bytes(plistlib.dumps(dict(Label=label,ProgramArguments=program,RunAtLoad=True,
         StandardOutPath=str(folder/'out'),StandardErrorPath=str(folder/'err'))))
@@ -1146,12 +1143,14 @@ sys.exit(result.returncode)
     try:
         deadline=time.monotonic()+15
         while not result.exists() and time.monotonic()<deadline: time.sleep(0.1)
-        if not result.exists() or result.read_text().strip()!='0':
-            raise SystemExit('macos_keychain_gui_write_failed: GUI credential writer failed or timed out; check Keychain access permissions in the remote desktop session')
+        if not result.exists():
+            raise SystemExit('macos_keychain_gui_write_timeout: desktop credential writer did not finish; check for a Keychain permission prompt on the remote Mac')
+        status=json.loads(result.read_text())
+        if status['code']!=0:
+            raise SystemExit('macos_keychain_gui_write_failed: '+status['error'].replace('go-keyring-base64:'+sys.argv[1], '[redacted]').strip())
     finally:
         subprocess.run(['launchctl','bootout',domain+'/'+label],capture_output=True)
 KEYCHAIN_GUI_PY
-  fi
 fi
 "#;
 
@@ -1352,8 +1351,26 @@ if [ "$(uname -s)" = "Darwin" ]; then
     pids="$(ps -u "$(id -u)" -o pid= -o comm= | awk -v executable="$app/Contents/MacOS/Antigravity" '$2 == executable { print $1 }')"
     [ -n "$pids" ] || continue
     kill -TERM $pids || exit 1
-    sleep 2
-    open -a "$app" || exit 1
+    for attempt in 1 2 3 4 5; do
+      alive=""
+      for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid" || true; done
+      [ -n "$alive" ] || break
+      sleep 1
+    done
+    for pid in $pids; do
+      if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" || exit 1; fi
+    done
+    open -n -a "$app" || exit 1
+    new_pids=""
+    for attempt in 1 2 3 4 5; do
+      new_pids="$(ps -u "$(id -u)" -o pid= -o comm= | awk -v executable="$app/Contents/MacOS/Antigravity" '$2 == executable { print $1 }')"
+      [ -n "$new_pids" ] && [ "$new_pids" != "$pids" ] && break
+      sleep 1
+    done
+    if [ -z "$new_pids" ] || [ "$new_pids" = "$pids" ]; then
+      printf 'antigravity_restart_failed: no fresh desktop process\n' >&2
+      exit 1
+    fi
     printf 'desktop-relaunched\n'
     exit 0
   done
@@ -1455,12 +1472,7 @@ async fn sync_antigravity_account_to_server(
         let bundle = build_antigravity_projection_bundle(account)
             .map_err(|e| format!("antigravity_bundle_failed: {}", sanitize_error(e)))?;
         upload_and_verify_antigravity_bundle(&server, &bundle).await?;
-        if let Err(reload_error) = reload_remote_antigravity_server(&server).await {
-            logger::log_warn(&format!(
-                "[Antigravity SSH] 远端进程刷新失败（鉴权已写入）: server_id={}, error={}",
-                server.id, reload_error
-            ));
-        }
+        reload_remote_antigravity_server(&server).await?;
         Ok::<_, String>(bundle)
     }
     .await;
@@ -1647,9 +1659,10 @@ compile(writers[0], 'generated-keychain-writer.py', 'exec')
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::write(dir.join("bin/uname"), "#!/bin/sh\necho Darwin\n").unwrap();
         std::fs::write(dir.join("bin/security"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/keychain-call\"\n").unwrap();
+        std::fs::write(dir.join("bin/launchctl"), "#!/usr/bin/python3\nimport sys,plistlib,subprocess\nif sys.argv[1]=='bootstrap':\n p=plistlib.load(open(sys.argv[-1],'rb'))\n sys.exit(subprocess.run(p['ProgramArguments']).returncode)\n").unwrap();
         #[cfg(unix)] {
             use std::os::unix::fs::PermissionsExt;
-            for name in ["uname", "security"] {
+            for name in ["uname", "security", "launchctl"] {
                 std::fs::set_permissions(dir.join("bin").join(name), std::fs::Permissions::from_mode(0o700)).unwrap();
             }
         }
