@@ -1120,7 +1120,17 @@ with tempfile.TemporaryDirectory(prefix='cockpit-keychain-') as root:
     folder=pathlib.Path(root)
     label='com.cockpit.antigravity-auth.' + str(uuid.uuid4())
     runner=folder/'runner.py'
-    runner.write_text('import subprocess,sys,pathlib\nargs=sys.argv[2:]\nresult=subprocess.run(args,capture_output=True,text=True)\nif result.returncode and \"-U\" in args:\n deleted=subprocess.run([args[0],\"delete-generic-password\",\"-s\",\"gemini\",\"-a\",\"antigravity\"],capture_output=True,text=True)\n if deleted.returncode==0:\n  args.remove(\"-U\")\n  result=subprocess.run(args,capture_output=True,text=True)\npathlib.Path(sys.argv[1]).write_text(str(result.returncode))\nsys.exit(result.returncode)\n')
+    runner.write_text('''import subprocess,sys,pathlib,json
+args=sys.argv[2:]
+result=subprocess.run(args,capture_output=True,text=True)
+if result.returncode and "-U" in args:
+    deleted=subprocess.run([args[0],"delete-generic-password","-s","gemini","-a","antigravity"],capture_output=True,text=True)
+    if deleted.returncode==0:
+        args.remove("-U")
+        result=subprocess.run(args,capture_output=True,text=True)
+pathlib.Path(sys.argv[1]).write_text(str(result.returncode))
+sys.exit(result.returncode)
+''')
     runner.chmod(0o700)
     result=folder/'result'
     program=[sys.executable,str(runner),str(result),shutil.which('security') or '/usr/bin/security',
@@ -1137,7 +1147,7 @@ with tempfile.TemporaryDirectory(prefix='cockpit-keychain-') as root:
         deadline=time.monotonic()+15
         while not result.exists() and time.monotonic()<deadline: time.sleep(0.1)
         if not result.exists() or result.read_text().strip()!='0':
-            raise SystemExit('macos_keychain_gui_write_failed: unlock the remote login Keychain and allow credential access')
+            raise SystemExit('macos_keychain_gui_write_failed: GUI credential writer failed or timed out; check Keychain access permissions in the remote desktop session')
     finally:
         subprocess.run(['launchctl','bootout',domain+'/'+label],capture_output=True)
 KEYCHAIN_GUI_PY
@@ -1575,6 +1585,30 @@ mod tests {
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    #[test]
+    fn macos_keychain_generated_gui_writer_is_valid_python() {
+        use std::io::Write;
+        let helper = MACOS_KEYCHAIN_GUI_SCRIPT.split("<<'KEYCHAIN_GUI_PY'\n").nth(1).unwrap()
+            .split("\nKEYCHAIN_GUI_PY").next().unwrap();
+        let validation = r#"
+import ast,sys
+source=sys.stdin.read()
+tree=ast.parse(source)
+writers=[node.value.args[0].value for node in ast.walk(tree)
+    if isinstance(node,ast.Expr) and isinstance(node.value,ast.Call)
+    and isinstance(node.value.func,ast.Attribute) and node.value.func.attr=='write_text'
+    and node.value.args and isinstance(node.value.args[0],ast.Constant)
+    and isinstance(node.value.args[0].value,str) and 'import subprocess' in node.value.args[0].value]
+assert len(writers)==1
+compile(writers[0], 'generated-keychain-writer.py', 'exec')
+"#;
+        let mut child = std::process::Command::new("python3").args(["-c", validation])
+            .stdin(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(helper.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 
     #[test]
