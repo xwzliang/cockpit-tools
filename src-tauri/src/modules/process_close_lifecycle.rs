@@ -1332,9 +1332,16 @@ pub fn start_antigravity_legacy_with_args(
                 args.push(arg.to_string());
             }
         }
+        let startup_log = dirs::home_dir().map(|home| home.join("Library/Logs/Antigravity/main.log"));
+        let startup_offset = startup_log.as_ref().and_then(|path| std::fs::metadata(path).ok())
+            .map(|meta| meta.len()).unwrap_or(0);
         let pid = spawn_open_app_with_options(&app_root, &args, true)
             .map_err(|e| format!("启动 Antigravity 失败: {}", e))?;
         crate::modules::logger::log_info("Antigravity 启动命令已发送（open -n -a）");
+        // Standalone Antigravity can load its window before its local server is ready.
+        if let Some(log_path) = startup_log {
+            crate::modules::antigravity_startup_recovery::watch(log_path, startup_offset);
+        }
         if !user_data_dir_trimmed.is_empty() {
             let probe_started = Instant::now();
             let timeout = Duration::from_secs(6);

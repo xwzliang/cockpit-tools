@@ -86,6 +86,8 @@ pub mod oauth_pending_state;
 pub mod oauth_server;
 pub mod openclaw_auth;
 pub mod opencode_auth;
+#[cfg(target_os = "macos")]
+mod antigravity_startup_recovery;
 pub mod process;
 pub mod process_memory;
 pub mod process_timeout;
