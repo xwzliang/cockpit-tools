@@ -13,18 +13,52 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 
-static RESUMED_TASKS_CACHE: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
+const RETRY_STATE_FILE: &str = "codex_auto_resume_retries.json";
+static RETRY_STATE: OnceLock<Mutex<HashMap<String, RecoveryRetry>>> = OnceLock::new();
+static RECOVERY_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
-fn resumed_tasks_cache() -> &'static Mutex<HashMap<String, i64>> {
-    RESUMED_TASKS_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RecoveryRetry {
+    task: InterruptedCodexTask,
+    attempts: u32,
+    next_attempt_at: i64,
+    first_attempt_at: i64,
 }
 
-fn claim_auto_resume(cache: &mut HashMap<String, i64>, task_id: &str, now_ts: i64) -> bool {
-    if cache.get(task_id).is_some_and(|last| now_ts - last < 1800) {
-        return false;
+fn retry_delay_seconds(attempts: u32) -> i64 {
+    match attempts {
+        0..=3 => 60,
+        4..=6 => 300,
+        _ => 600,
     }
-    cache.insert(task_id.to_string(), now_ts);
-    true
+}
+
+fn retry_state() -> &'static Mutex<HashMap<String, RecoveryRetry>> {
+    RETRY_STATE.get_or_init(|| {
+        let retries = crate::modules::account::get_data_dir().ok()
+            .and_then(|dir| std::fs::read_to_string(dir.join(RETRY_STATE_FILE)).ok())
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+        Mutex::new(retries)
+    })
+}
+
+fn save_retry_state(retries: &HashMap<String, RecoveryRetry>) {
+    if let Ok(dir) = crate::modules::account::get_data_dir() {
+        if let Ok(json) = serde_json::to_string_pretty(retries) {
+            if let Err(err) = crate::modules::atomic_write::write_string_atomic(&dir.join(RETRY_STATE_FILE), &json) {
+                logger::log_warn(&format!("[CodexAutoResume] 保存恢复重试状态失败: {}", err));
+            }
+        }
+    }
+}
+
+fn schedule_next_retry(retry: &mut RecoveryRetry, now_ts: i64) {
+    retry.attempts = retry.attempts.saturating_add(1);
+    if retry.first_attempt_at == 0 {
+        retry.first_attempt_at = now_ts;
+    }
+    retry.next_attempt_at = now_ts + retry_delay_seconds(retry.attempts);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1461,7 +1495,14 @@ pub async fn check_and_auto_switch_for_earlier_reset(app: &AppHandle) -> Result<
 
     // 1. 检查是否存在待恢复的中断任务
     let tasks = detect_all_interrupted_tasks().await;
-    let has_interrupted_tasks = tasks.iter().any(|t| !t.is_excluded);
+    let excluded = load_excluded_task_ids();
+    let dismissed = load_dismissed_task_ids();
+    let has_interrupted_tasks = tasks.iter().any(|t| !t.is_excluded)
+        || retry_state().lock().unwrap_or_else(|e| e.into_inner()).values().any(|retry| {
+            !excluded.contains(&retry.task.id) && !excluded.contains(&retry.task.thread_id)
+                && !dismissed.contains(&retry.task.id) && !dismissed.contains(&retry.task.thread_id)
+                && (retry.task.source == "local" || cfg.codex_auto_resume_sync_ssh)
+        });
     if !has_interrupted_tasks {
         return Ok(false);
     }
@@ -1709,23 +1750,159 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
     resume_available_interrupted_tasks(app).await;
 }
 
+#[derive(Debug, PartialEq)]
+enum RecoveryProgress { Running, Finished, Retry }
+
+// Launch acknowledgement is not completion. Watch the latest turn and CLI
+// process so failures after launch remain eligible without duplicating live work.
+const PYTHON_RECOVERY_PROGRESS: &str = r#"
+import base64, json, os, sqlite3, subprocess, sys
+from pathlib import Path
+from datetime import datetime
+args = json.loads(base64.b64decode(sys.argv[1]))
+home = Path(os.environ.get("CODEX_HOME") or str(Path.home() / ".codex"))
+thread = args["thread_id"]
+since = args["since"]
+result = "retry"
+def timestamp(value):
+    try:
+        n = float(value)
+        return n / 1000 if n > 100000000000 else n
+    except (ValueError, TypeError):
+        try: return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+        except Exception: return 0
+try:
+    db = sqlite3.connect(f"file:{home / 'thread_history_1.sqlite'}?mode=ro", uri=True)
+    row = db.execute("SELECT status, started_at FROM thread_turns WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1", (thread,)).fetchone()
+    db.close()
+    if row:
+        if row[0] == "inProgress": result = "running"
+        elif since and timestamp(row[1]) >= since and row[0] in ("completed", "cancelled", "canceled"):
+            result = "finished"
+except Exception: pass
+try:
+    db = sqlite3.connect(f"file:{home / 'state_5.sqlite'}?mode=ro", uri=True)
+    row = db.execute("SELECT archived, rollout_path FROM threads WHERE id = ?", (thread,)).fetchone()
+    db.close()
+    if row and row[0]: result = "finished"
+    elif row and row[1] and since and result == "retry":
+        with open(row[1], "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 262144))
+            lines = f.read().decode("utf-8", errors="ignore").splitlines()
+        for line in reversed(lines):
+            try: event = json.loads(line)
+            except Exception: continue
+            if timestamp(event.get("timestamp")) < since: break
+            payload = event.get("payload", {})
+            if event.get("type") == "event_msg":
+                kind = payload.get("type")
+                if kind in ("task_complete", "task_completed", "turn_aborted"):
+                    result = "finished"
+                    break
+                if kind in ("task_started", "error"):
+                    break
+except Exception: pass
+try:
+    # The CLI fallback may not write thread_history while it is executing.
+    processes = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True, timeout=5).stdout
+    if result != "finished" and any(thread in line and "codex" in line and "exec" in line and "resume" in line for line in processes.splitlines()):
+        result = "running"
+except Exception: pass
+print("__RECOVERY_PROGRESS__" + result)
+"#;
+
+async fn recovery_progress(retry: &RecoveryRetry) -> RecoveryProgress {
+    let encoded = BASE64_STANDARD.encode(serde_json::json!({
+        "thread_id": retry.task.thread_id,
+        "since": retry.first_attempt_at,
+    }).to_string());
+    let output = if retry.task.source == "local" {
+        let script = PYTHON_RECOVERY_PROGRESS.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut child = std::process::Command::new("python3")
+                .args(["-", &encoded]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+                .spawn().map_err(|err| err.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                stdin.write_all(script.as_bytes()).map_err(|err| err.to_string())?;
+            }
+            child.wait_with_output().map(|out| String::from_utf8_lossy(&out.stdout).to_string()).map_err(|err| err.to_string())
+        }).await.unwrap_or_else(|err| Err(err.to_string()))
+    } else {
+        let server = ssh_server::list_servers().ok().and_then(|list| list.servers.into_iter()
+            .find(|server| Some(server.id.as_str()) == retry.task.server_id.as_deref()));
+        match server {
+            Some(server) => ssh_server::run_ssh(&server, 25, &["python3", "-", &encoded], Some(PYTHON_RECOVERY_PROGRESS.to_string())).await,
+            None => Err("Recovery server unavailable".to_string()),
+        }
+    };
+    match output {
+        Ok(text) if text.contains("__RECOVERY_PROGRESS__running") => RecoveryProgress::Running,
+        Ok(text) if text.contains("__RECOVERY_PROGRESS__finished") => RecoveryProgress::Finished,
+        _ => RecoveryProgress::Retry,
+    }
+}
+
 async fn resume_available_interrupted_tasks(app: &AppHandle) {
+    // Serialize the scheduler and delayed switch callback across detection and launch.
+    if RECOVERY_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) { RECOVERY_IN_PROGRESS.store(false, Ordering::SeqCst); }
+    }
+    let _guard = Guard;
     let tasks = detect_all_interrupted_tasks().await;
     let now_ts = Utc::now().timestamp();
+    let pending = {
+        let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
+        for task in tasks {
+            if !task.is_excluded {
+                retries.entry(task.id.clone()).or_insert(RecoveryRetry {
+                    task, attempts: 0, next_attempt_at: 0, first_attempt_at: 0,
+                });
+            }
+        }
+        save_retry_state(&retries);
+        retries.values().cloned().collect::<Vec<_>>()
+    };
 
-    for task in tasks {
-        if !task.can_resume || task.is_excluded {
+    for retry in pending {
+        let task = retry.task.clone();
+        let cfg = config::get_user_config();
+        if !cfg.codex_auto_resume_interrupted_tasks_enabled { return; }
+        let excluded = load_excluded_task_ids();
+        let dismissed = load_dismissed_task_ids();
+        if excluded.contains(&task.id) || excluded.contains(&task.thread_id)
+            || dismissed.contains(&task.id) || dismissed.contains(&task.thread_id) {
+            let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
+            retries.remove(&task.id);
+            save_retry_state(&retries);
             continue;
         }
-
-        // Deduplication check: avoid triggering repeatedly within 30 minutes
-        let should_trigger = {
-            let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
-            claim_auto_resume(&mut cache, &task.id, now_ts)
-        };
-
-        if !should_trigger {
-            continue;
+        if task.source != "local" && !cfg.codex_auto_resume_sync_ssh { continue; }
+        if now_ts < retry.next_attempt_at { continue; }
+        match recovery_progress(&retry).await {
+            RecoveryProgress::Finished => {
+                let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
+                retries.remove(&task.id);
+                save_retry_state(&retries);
+                continue;
+            }
+            RecoveryProgress::Running => continue,
+            RecoveryProgress::Retry => {}
+        }
+        // Re-check immediately before each launch; detection's pool-wide quota is
+        // insufficient when the active account has run out during this batch.
+        if !get_current_codex_quota_resets_at().2 { return; }
+        {
+            let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(state) = retries.get_mut(&task.id) {
+                schedule_next_retry(state, Utc::now().timestamp());
+            }
+            save_retry_state(&retries);
         }
 
         logger::log_info(&format!(
@@ -1734,6 +1911,14 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
         ));
 
         let res = resume_task(&task, None, "auto").await;
+        // Measure the delay from the end of the attempt, including slow failures.
+        {
+            let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(state) = retries.get_mut(&task.id) {
+                state.next_attempt_at = Utc::now().timestamp() + retry_delay_seconds(state.attempts);
+            }
+            save_retry_state(&retries);
+        }
         match res {
             Ok(result) => {
                 logger::log_info(&format!(
@@ -1778,8 +1963,7 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
                     "[CodexAutoResume] 自动恢复任务失败: {} - {}",
                     task.id, err
                 ));
-                let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
-                cache.insert(task.id.clone(), now_ts - 1800 + 60);
+                // Keep the recovery record: the next scheduler pass retries when due.
             }
         }
     }
@@ -1799,7 +1983,7 @@ pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
     }
 
     logger::log_info("[CodexAutoResume] 切号后检测到配额可用，开始检查并立即恢复勾选的中断任务...");
-    // Share the scheduler's atomic claim and retry policy. The delayed switch
+    // Share the scheduler's serialized recovery loop and retry policy. The delayed switch
     // callback can overlap the scheduler that initiated the account switch.
     resume_available_interrupted_tasks(app).await;
 }
@@ -1958,21 +2142,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auto_resume_regression_switch_callback_and_scheduler_share_claim() {
-        let mut cache = HashMap::new();
-        assert!(claim_auto_resume(&mut cache, "task", 2000));
-        assert!(!claim_auto_resume(&mut cache, "task", 2001));
-        assert!(claim_auto_resume(&mut cache, "other", 2001));
-        assert!(claim_auto_resume(&mut cache, "task", 3800));
+    fn auto_resume_regression_backoff_continues_without_a_retry_limit() {
+        assert_eq!(retry_delay_seconds(1), 60);
+        assert_eq!(retry_delay_seconds(3), 60);
+        assert_eq!(retry_delay_seconds(4), 300);
+        assert_eq!(retry_delay_seconds(6), 300);
+        assert_eq!(retry_delay_seconds(7), 600);
+        assert_eq!(retry_delay_seconds(u32::MAX), 600);
     }
 
     #[test]
-    fn auto_resume_regression_failure_retries_after_one_minute() {
-        let mut cache = HashMap::new();
-        assert!(claim_auto_resume(&mut cache, "task", 2000));
-        cache.insert("task".to_string(), 2000 - 1800 + 60);
-        assert!(!claim_auto_resume(&mut cache, "task", 2059));
-        assert!(claim_auto_resume(&mut cache, "task", 2060));
+    fn auto_resume_regression_retry_state_survives_restart() {
+        let task: InterruptedCodexTask = serde_json::from_value(serde_json::json!({
+            "thread_id": "thread", "title": "Task", "status": "usage_limited"
+        })).unwrap();
+        let mut retry = RecoveryRetry { task, attempts: 0, next_attempt_at: 0, first_attempt_at: 0 };
+        schedule_next_retry(&mut retry, 2000);
+        assert_eq!(retry.next_attempt_at, 2060);
+        for now in [2060, 2120, 2180] { schedule_next_retry(&mut retry, now); }
+        assert_eq!(retry.next_attempt_at, 2480);
+        let json = serde_json::to_string(&retry).unwrap();
+        let restored: RecoveryRetry = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.attempts, 4);
+        assert_eq!(restored.first_attempt_at, 2000);
+        assert_eq!(restored.next_attempt_at, 2480);
+    }
+
+    #[tokio::test]
+    async fn auto_resume_regression_observes_execution_instead_of_launch_ack() {
+        let dir = std::env::temp_dir().join(format!("cockpit-recovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let thread_id = format!("recovery-test-{}", uuid::Uuid::new_v4());
+        let conn = rusqlite::Connection::open(dir.join("thread_history_1.sqlite")).unwrap();
+        conn.execute_batch("CREATE TABLE thread_turns (thread_id TEXT, status TEXT, started_at INTEGER);").unwrap();
+        let now = Utc::now().timestamp();
+        conn.execute("INSERT INTO thread_turns VALUES (?, 'completed', ?)", rusqlite::params![thread_id, (now - 100) * 1000]).unwrap();
+        let encoded = BASE64_STANDARD.encode(serde_json::json!({"thread_id": thread_id, "since": now}).to_string());
+        for (status, started_at, expected) in [
+            ("completed", (now - 100) * 1000, "retry"),
+            ("inProgress", now * 1000, "running"),
+            ("failed", now * 1000, "retry"),
+            ("completed", now * 1000, "finished"),
+            ("cancelled", now * 1000, "finished"),
+        ] {
+            conn.execute("UPDATE thread_turns SET status = ?, started_at = ?", rusqlite::params![status, started_at]).unwrap();
+            let mut child = std::process::Command::new("python3")
+                .args(["-", &encoded]).env("CODEX_HOME", &dir)
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            {
+                use std::io::Write;
+                child.stdin.take().unwrap().write_all(PYTHON_RECOVERY_PROGRESS.as_bytes()).unwrap();
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success());
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), format!("__RECOVERY_PROGRESS__{}", expected));
+        }
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
