@@ -1,5 +1,6 @@
 export type SshAuthConfig =
   | { kind: 'agent' }
+  | { kind: 'ssh_config' }
   | { kind: 'private_key_file'; path: string };
 
 export interface SshCodexSyncStatus {

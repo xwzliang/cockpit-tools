@@ -11,6 +11,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { listSshConfigHosts } from '../../services/sshServerService';
 import { useSshServerStore } from '../../stores/useSshServerStore';
 import type {
   SshAuthConfig,
@@ -27,7 +28,7 @@ interface FormState {
   username: string;
   codexHome: string;
   antigravityHome: string;
-  authKind: 'agent' | 'private_key_file';
+  authKind: 'agent' | 'private_key_file' | 'ssh_config';
   privateKeyPath: string;
   syncOnSwitch: boolean;
   syncOnAntigravitySwitch: boolean;
@@ -66,13 +67,13 @@ function draftFromForm(form: FormState): SshServerDraft {
   const auth: SshAuthConfig =
     form.authKind === 'private_key_file'
       ? { kind: 'private_key_file', path: form.privateKeyPath.trim() }
-      : { kind: 'agent' };
+      : { kind: form.authKind };
   return {
     id: form.id,
-    name: form.name.trim(),
+    name: form.name.trim() || (form.authKind === 'ssh_config' ? form.host.trim() : ''),
     host: form.host.trim(),
-    port: Number.parseInt(form.port, 10) || 22,
-    username: form.username.trim(),
+    port: form.authKind === 'ssh_config' ? 22 : Number.parseInt(form.port, 10) || 22,
+    username: form.authKind === 'ssh_config' ? '' : form.username.trim(),
     codex_home: form.codexHome.trim() || '~/.codex',
     antigravity_home: form.antigravityHome.trim() || '~/.gemini',
     auth,
@@ -109,6 +110,8 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
     applySyncResult,
   } = useSshServerStore();
   const [form, setForm] = useState<FormState>(emptyForm);
+  const [configHosts, setConfigHosts] = useState<string[]>([]);
+  const [customAlias, setCustomAlias] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busyServerId, setBusyServerId] = useState<string | null>(null);
   const [localMessage, setLocalMessage] = useState<{
@@ -123,6 +126,13 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
 
   useEffect(() => {
     void fetchServers();
+    let disposed = false;
+    void listSshConfigHosts().then((hosts) => {
+      if (!disposed) setConfigHosts(hosts);
+    }).catch((error: unknown) => {
+      if (!disposed) setLocalMessage({ kind: 'error', text: String(error) });
+    });
+    return () => { disposed = true; };
   }, [fetchServers]);
 
   useEffect(() => {
@@ -164,7 +174,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
             (server) =>
               server.host === draft.host &&
               server.port === draft.port &&
-              server.username === draft.username,
+              server.username === draft.username && server.auth.kind === draft.auth.kind,
           ) ?? list.find((server) => server.id === draft.id);
         if (matched) {
           await selectServer(matched.id);
@@ -315,28 +325,61 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
 
           <div className="codex-ssh-panel__fields">
             <label className="codex-ssh-panel__field">
+              <span>{t('codex.ssh.connectionSettings', '连接设置')}</span>
+              <select className="form-input" value={form.authKind === 'ssh_config' ? 'ssh_config' : 'manual'}
+                onChange={(event) => {
+                  setCustomAlias(false);
+                  setForm({ ...form, authKind: event.target.value === 'ssh_config' ? 'ssh_config' : 'agent' });
+                }}>
+                <option value="manual">{t('codex.ssh.manualSettings', '手动填写')}</option>
+                <option value="ssh_config">{t('codex.ssh.configSettings', '使用 SSH config')}</option>
+              </select>
+              {form.authKind === 'ssh_config' && <small>{t('codex.ssh.configSettingsHint', '填写 ~/.ssh/config 中的 Host 别名，自动使用主机、用户名、端口、密钥和跳板机设置。')}</small>}
+            </label>
+
+            <label className="codex-ssh-panel__field">
               <span>{t('codex.ssh.name', '名称')}</span>
               <input
                 className="form-input"
                 value={form.name}
                 onChange={(event) => setForm({ ...form, name: event.target.value })}
-                placeholder={t('codex.ssh.namePlaceholder', '例如：家里 NAS')}
-                required
+                placeholder={form.authKind === 'ssh_config' ? t('codex.ssh.aliasNamePlaceholder', '默认使用 Host 别名') : t('codex.ssh.namePlaceholder', '例如：家里 NAS')}
+                required={form.authKind !== 'ssh_config'}
               />
             </label>
 
-            <div className="codex-ssh-panel__field-grid codex-ssh-panel__field-grid--host">
+            <div className={form.authKind === 'ssh_config' ? undefined : 'codex-ssh-panel__field-grid codex-ssh-panel__field-grid--host'}>
               <label className="codex-ssh-panel__field">
-                <span>{t('codex.ssh.host', '主机')}</span>
-                <input
+                <span>{form.authKind === 'ssh_config' ? t('codex.ssh.configAlias', 'SSH Host 别名') : t('codex.ssh.host', '主机')}</span>
+                {form.authKind === 'ssh_config' && (
+                  <>
+                    <select className="form-input" value={customAlias ? '-manual-' : form.host}
+                      required={!customAlias}
+                      onChange={(event) => {
+                        const alias = event.target.value;
+                        setCustomAlias(alias === '-manual-');
+                        if (alias !== '-manual-') setForm({ ...form, host: alias });
+                      }}>
+                      <option value="">{t('codex.ssh.chooseConfigHost', '选择 SSH config 主机')}</option>
+                      {form.host && !configHosts.includes(form.host) && <option value={form.host}>{form.host}</option>}
+                      {configHosts.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
+                      <option value="-manual-">{t('codex.ssh.enterConfigAlias', '手动输入其他别名…')}</option>
+                    </select>
+                    <button className="btn btn-secondary" type="button" onClick={() => {
+                      void listSshConfigHosts().then(setConfigHosts).catch((error: unknown) =>
+                        setLocalMessage({ kind: 'error', text: String(error) }));
+                    }}>{t('codex.ssh.refreshConfigHosts', '刷新 SSH config 主机')}</button>
+                  </>
+                )}
+                {(form.authKind !== 'ssh_config' || customAlias) && <input
                   className="form-input"
                   value={form.host}
                   onChange={(event) => setForm({ ...form, host: event.target.value })}
-                  placeholder="192.168.1.10"
+                  placeholder={form.authKind === 'ssh_config' ? 'macbookair' : '192.168.1.10'}
                   required
-                />
+                />}
               </label>
-              <label className="codex-ssh-panel__field">
+              {form.authKind !== 'ssh_config' && <label className="codex-ssh-panel__field">
                 <span>{t('codex.ssh.port', '端口')}</span>
                 <input
                   className="form-input"
@@ -345,11 +388,11 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                   onChange={(event) => setForm({ ...form, port: event.target.value })}
                   required
                 />
-              </label>
+              </label>}
             </div>
 
-            <div className="codex-ssh-panel__field-grid">
-              <label className="codex-ssh-panel__field">
+            <div className={form.authKind === 'ssh_config' ? undefined : 'codex-ssh-panel__field-grid'}>
+              {form.authKind !== 'ssh_config' && <label className="codex-ssh-panel__field">
                 <span>{t('codex.ssh.username', '用户名')}</span>
                 <input
                   className="form-input"
@@ -360,7 +403,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                   placeholder="ubuntu"
                   required
                 />
-              </label>
+              </label>}
               <label className="codex-ssh-panel__field">
                 <span>{t('codex.ssh.codexHome', '远端 Codex 目录')}</span>
                 <input
@@ -386,7 +429,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
               />
             </label>
 
-            <div className="codex-ssh-panel__auth">
+            {form.authKind !== 'ssh_config' && <div className="codex-ssh-panel__auth">
               <span className="codex-ssh-panel__field-label">
                 {t('codex.ssh.authMethod', '认证方式')}
               </span>
@@ -414,7 +457,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                   {t('codex.ssh.privateKeyAuth', '私钥文件')}
                 </button>
               </div>
-            </div>
+            </div>}
 
             {form.authKind === 'private_key_file' && (
               <label className="codex-ssh-panel__field">
@@ -569,7 +612,7 @@ export function CodexSshServersPanel({ embedded = false }: CodexSshServersPanelP
                         </div>
                         <div className="codex-ssh-panel__item-meta">
                           <code>
-                            {server.username}@{server.host}:{server.port}
+                            {server.auth.kind === 'ssh_config' ? server.host : `${server.username}@${server.host}:${server.port}`}
                           </code>
                           <span className="codex-ssh-panel__dot">·</span>
                           <span>{server.codex_home}</span>

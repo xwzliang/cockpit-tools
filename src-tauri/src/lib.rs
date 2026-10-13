@@ -1244,6 +1244,7 @@ pub fn run() {
             commands::codebuddy::inject_codebuddy_to_vscode,
             commands::codebuddy_session::codebuddy_list_sessions,
             commands::ssh_server::list_ssh_servers,
+            commands::ssh_server::list_ssh_config_hosts,
             commands::ssh_server::upsert_ssh_server,
             commands::ssh_server::delete_ssh_server,
             commands::ssh_server::select_ssh_server,

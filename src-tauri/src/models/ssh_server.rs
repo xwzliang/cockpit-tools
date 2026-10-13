@@ -50,6 +50,7 @@ pub struct SshServer {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SshAuthConfig {
     Agent,
+    SshConfig,
     PrivateKeyFile { path: String },
 }
 

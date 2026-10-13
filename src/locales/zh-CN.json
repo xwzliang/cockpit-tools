@@ -4784,6 +4784,15 @@
       "success": "访问令牌账号已导入: {{name}}"
     },
     "ssh": {
+      "chooseConfigHost": "选择 SSH config 主机",
+      "enterConfigAlias": "手动输入其他别名…",
+      "refreshConfigHosts": "刷新 SSH config 主机",
+      "connectionSettings": "连接设置",
+      "manualSettings": "手动填写",
+      "configSettings": "使用 SSH config",
+      "configSettingsHint": "填写 ~/.ssh/config 中的 Host 别名，自动使用主机、用户名、端口、密钥和跳板机设置。",
+      "configAlias": "SSH Host 别名",
+      "aliasNamePlaceholder": "默认使用 Host 别名",
       "syncSwitch": "切号同步 SSH",
       "syncSwitchDesc": "开启后配置 SSH 主机；Codex 切号时把当前账号同步到远端。",
       "configure": "配置",

@@ -4780,6 +4780,15 @@
       "success": "Access-token account imported: {{name}}"
     },
     "ssh": {
+      "chooseConfigHost": "Choose an SSH config host",
+      "enterConfigAlias": "Enter another alias…",
+      "refreshConfigHosts": "Refresh SSH config hosts",
+      "connectionSettings": "Connection settings",
+      "manualSettings": "Enter manually",
+      "configSettings": "Use SSH config",
+      "configSettingsHint": "Enter a Host alias from ~/.ssh/config to reuse its hostname, user, port, keys, and jump host settings.",
+      "configAlias": "SSH Host alias",
+      "aliasNamePlaceholder": "Defaults to Host alias",
       "syncSwitch": "SSH on switch",
       "syncSwitchDesc": "Turn on to configure an SSH host; Codex switches sync the current account remotely.",
       "configure": "Setup",

@@ -61,3 +61,7 @@ export async function syncCurrentAntigravityAccountToSshServer(
     serverId: serverId ?? null,
   });
 }
+
+export async function listSshConfigHosts(): Promise<string[]> {
+  return await invoke('list_ssh_config_hosts');
+}

@@ -847,6 +847,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "futures-util",
+ "glob",
  "junction",
  "lazy_static",
  "libc",

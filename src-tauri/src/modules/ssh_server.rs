@@ -32,6 +32,79 @@ pub struct SshServerList {
     pub servers: Vec<SshServer>,
 }
 
+/// Only enumerate aliases; OpenSSH itself resolves connection settings at use time.
+pub fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
+    let home = dirs::home_dir().ok_or("Unable to locate the user home directory")?;
+    let mut aliases = std::collections::BTreeSet::new();
+    let mut visited = std::collections::HashSet::new();
+    collect_ssh_config_hosts(&home.join(".ssh/config"), &home.join(".ssh"), &home, &mut visited, &mut aliases)?;
+    #[cfg(unix)]
+    collect_ssh_config_hosts(std::path::Path::new("/etc/ssh/ssh_config"), std::path::Path::new("/etc/ssh"), &home, &mut visited, &mut aliases)?;
+    Ok(aliases.into_iter().collect())
+}
+
+fn ssh_config_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in line.chars() {
+        if escaped { word.push(ch); escaped = false; continue; }
+        if ch == '\\' && quote != Some('\'') { escaped = true; continue; }
+        if let Some(current) = quote {
+            if ch == current { quote = None; } else { word.push(ch); }
+        } else if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+        } else if ch == '#' {
+            break;
+        } else if ch.is_whitespace() {
+            if !word.is_empty() { words.push(std::mem::take(&mut word)); }
+        } else { word.push(ch); }
+    }
+    if !word.is_empty() { words.push(word); }
+    words
+}
+
+fn collect_ssh_config_hosts(
+    path: &std::path::Path, base: &std::path::Path, home: &std::path::Path,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    aliases: &mut std::collections::BTreeSet<String>,
+) -> Result<(), String> {
+    if !path.is_file() { return Ok(()); }
+    let canonical = std::fs::canonicalize(path).map_err(|err| err.to_string())?;
+    if !visited.insert(canonical) { return Ok(()); }
+    if visited.len() > 256 { return Err("SSH config includes too many files".to_string()); }
+    let config = std::fs::read_to_string(path).map_err(|err| format!("Unable to read SSH config {}: {}", path.display(), err))?;
+    for line in config.lines() {
+        let line = line.trim();
+        let Some(separator) = line.find(|ch: char| ch.is_whitespace() || ch == '=') else { continue; };
+        let keyword = &line[..separator];
+        let values = ssh_config_words(line[separator..].trim_start().trim_start_matches('=').trim_start());
+        if keyword.eq_ignore_ascii_case("host") {
+            for alias in values {
+                if !alias.chars().any(|ch| matches!(ch, '*' | '?' | '!') || ch.is_whitespace())
+                    && !alias.starts_with('-') && !contains_control_separator(&alias) {
+                    aliases.insert(alias);
+                }
+            }
+        } else if keyword.eq_ignore_ascii_case("include") {
+            for pattern in values {
+                let expanded = if let Some(suffix) = pattern.strip_prefix("~/") {
+                    home.join(suffix)
+                } else if std::path::Path::new(&pattern).is_absolute() {
+                    PathBuf::from(pattern)
+                } else { base.join(pattern) };
+                let paths = glob::glob(&expanded.to_string_lossy()).map_err(|err| err.to_string())?;
+                for included in paths {
+                    let included = included.map_err(|err| err.to_string())?;
+                    collect_ssh_config_hosts(&included, base, home, visited, aliases)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn now_timestamp() -> i64 {
     chrono::Utc::now().timestamp()
 }
@@ -142,7 +215,7 @@ fn validate_server(server: &SshServer) -> Result<(), String> {
         ("codex_home", server.codex_home.as_str()),
         ("antigravity_home", server.antigravity_home.as_str()),
     ] {
-        if value.trim().is_empty() {
+        if value.trim().is_empty() && !(label == "username" && matches!(server.auth, SshAuthConfig::SshConfig)) {
             return Err(format!("SSH server {} is required", label));
         }
         if contains_control_separator(value) {
@@ -152,11 +225,14 @@ fn validate_server(server: &SshServer) -> Result<(), String> {
             ));
         }
     }
+    if server.host.starts_with('-') || server.host.chars().any(char::is_whitespace) {
+        return Err("SSH host must be a hostname or SSH config alias".to_string());
+    }
     if server.port == 0 {
         return Err("SSH server port must be between 1 and 65535".to_string());
     }
     match &server.auth {
-        SshAuthConfig::Agent => {}
+        SshAuthConfig::Agent | SshAuthConfig::SshConfig => {}
         SshAuthConfig::PrivateKeyFile { path } => {
             if path.trim().is_empty() {
                 return Err("SSH private key path is required".to_string());
@@ -311,8 +387,6 @@ fn selected_server_from_store(store: &SshServerStore) -> Option<SshServer> {
 fn build_ssh_args(server: &SshServer, connect_timeout_secs: u64) -> Vec<String> {
     let connect_timeout = connect_timeout_secs.clamp(3, 30);
     let mut args = vec![
-        "-p".to_string(),
-        server.port.to_string(),
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
@@ -324,6 +398,9 @@ fn build_ssh_args(server: &SshServer, connect_timeout_secs: u64) -> Vec<String> 
         "-o".to_string(),
         "ServerAliveCountMax=2".to_string(),
     ];
+    if !matches!(server.auth, SshAuthConfig::SshConfig) {
+        args.extend(["-p".to_string(), server.port.to_string()]);
+    }
     if let SshAuthConfig::PrivateKeyFile { path } = &server.auth {
         // 与手动 `ssh -o IdentitiesOnly=yes -i key` 对齐：只用指定私钥，不试 agent 其它身份
         args.push("-o".to_string());
@@ -331,7 +408,13 @@ fn build_ssh_args(server: &SshServer, connect_timeout_secs: u64) -> Vec<String> 
         args.push("-i".to_string());
         args.push(path.clone());
     }
-    args.push(format!("{}@{}", server.username, server.host));
+    // Pass the original alias unchanged: OpenSSH resolves HostName, User, Port,
+    // IdentityFile, Include, ProxyJump and other options from its config.
+    args.push(if matches!(server.auth, SshAuthConfig::SshConfig) {
+        server.host.clone()
+    } else {
+        format!("{}@{}", server.username, server.host)
+    });
     args
 }
 
@@ -1398,6 +1481,35 @@ mod tests {
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    #[test]
+    fn ssh_config_dropdown_reads_includes_quotes_and_filters_patterns() {
+        let dir = std::env::temp_dir().join(format!("cockpit-ssh-config-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("conf.d")).unwrap();
+        std::fs::write(dir.join("config"), "Host macbookair daily !excluded *.local ?wild\nInclude conf.d/*.conf\nhost=quoted other # comment\n").unwrap();
+        std::fs::write(dir.join("conf.d/remote.conf"), "Host \"pve-ubuntu\" daily\nInclude config\n").unwrap();
+        let mut aliases = std::collections::BTreeSet::new();
+        collect_ssh_config_hosts(&dir.join("config"), &dir, &dir, &mut std::collections::HashSet::new(), &mut aliases).unwrap();
+        assert_eq!(aliases.into_iter().collect::<Vec<_>>(), ["daily", "macbookair", "other", "pve-ubuntu", "quoted"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn ssh_config_alias_preserves_openssh_connection_settings() {
+        let mut server = valid_server();
+        server.auth = SshAuthConfig::SshConfig;
+        server.host = "my-dev-host".to_string();
+        server.username.clear();
+        assert!(validate_server(&server).is_ok());
+        let args = build_ssh_args(&server, 12);
+        assert_eq!(args.last().unwrap(), "my-dev-host");
+        for override_arg in ["-p", "-l", "-i", "IdentitiesOnly=yes", "-F"] {
+            assert!(!args.iter().any(|arg| arg == override_arg));
+        }
+        assert!(args.iter().any(|arg| arg == "BatchMode=yes"));
+        server.host = "-oProxyCommand=command".to_string();
+        assert!(validate_server(&server).is_err());
     }
 
     #[test]
