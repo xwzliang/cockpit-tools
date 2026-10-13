@@ -195,15 +195,13 @@ const PYTHON_REMOTE_PROBE: &str = r#"
 import os, sys, glob, json, sqlite3, time
 
 def parse_iso_time(s):
-    if not s: return int(time.time())
+    if not s: return 0
     try:
         from datetime import datetime
-        s_clean = s.split('.')[0].replace('Z', '')
-        if '+' in s_clean: s_clean = s_clean.split('+')[0]
-        dt = datetime.fromisoformat(s_clean)
+        dt = datetime.fromisoformat(str(s).replace('Z', '+00:00'))
         return int(dt.timestamp())
     except:
-        return int(time.time())
+        return 0
 
 def check_task():
     home = os.path.expanduser(os.environ.get('ANTIGRAVITY_HOME', '~/.gemini'))
@@ -220,7 +218,7 @@ def check_task():
             continue
         root_dir = os.path.dirname(db_path)
         try:
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect('file:' + db_path + '?mode=ro', uri=True)
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT conversation_id, title, preview, status, not_fully_idle, killed, last_modified_time, workspace_uris
@@ -231,7 +229,8 @@ def check_task():
             rows = cursor.fetchall()
             for r in rows:
                 cid, title, preview, c_status, not_fully_idle, killed, last_mod_str, ws_uris = r
-                if not cid or cid in seen_ids:
+                # Ignore old cached transcript errors from previous installations.
+                if not cid or cid in seen_ids or parse_iso_time(last_mod_str) < int(time.time()) - 7 * 86400:
                     continue
                 
                 transcript_path = os.path.join(root_dir, 'brain', cid, '.system_generated', 'logs', 'transcript.jsonl')
@@ -761,7 +760,7 @@ async fn resume_local_task(thread_id: &str, prompt: &str) -> Result<ResumeTaskRe
 }
 
 const PYTHON_REMOTE_RESUME: &str = r#"
-import os, sys, json, base64, shutil, subprocess, time
+import os, sys, json, base64, shutil, subprocess, time, shlex
 from pathlib import Path
 args = json.loads(base64.b64decode(sys.argv[1]))
 home = Path(os.environ.get('ANTIGRAVITY_HOME', str(Path.home() / '.gemini'))).expanduser()
@@ -771,17 +770,29 @@ def resume():
     agentapi = next((str(p) for p in agentapis if p.is_file() and os.access(p, os.X_OK)), None)
     if agentapi:
         ports = []
+        csrf_by_pid = {}
         try:
+            processes = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, timeout=5)
+            for line in processes.stdout.splitlines():
+                if 'language_server' not in line: continue
+                command = shlex.split(line)
+                for i, arg in enumerate(command):
+                    if arg == '--csrf_token' and i + 1 < len(command):
+                        csrf_by_pid[command[0]] = command[i + 1]
+                    elif arg.startswith('--csrf_token='):
+                        csrf_by_pid[command[0]] = arg.split('=', 1)[1]
             out = subprocess.run(['lsof', '-iTCP', '-sTCP:LISTEN', '-n', '-P'], capture_output=True, text=True, timeout=5)
             for line in out.stdout.splitlines():
                 if 'language_' in line or 'language_server' in line:
                     for word in line.split():
                         if word.startswith('127.0.0.1:'):
-                            ports.append(word.rsplit(':', 1)[1])
+                            columns = line.split()
+                            ports.append((word.rsplit(':', 1)[1], csrf_by_pid.get(columns[1])))
         except Exception: pass
-        for port in dict.fromkeys(ports):
+        for port, csrf in dict.fromkeys(ports):
             if not port.isdigit(): continue
             env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS='localhost:' + port)
+            if csrf: env['ANTIGRAVITY_CSRF_TOKEN'] = csrf
             probe = subprocess.run([agentapi, 'get-conversation-metadata', cid], env=env, capture_output=True, text=True, timeout=5)
             if probe.returncode: continue
             out = subprocess.run([agentapi, 'send-message', cid, prompt], env=env, capture_output=True, text=True, timeout=10)
@@ -1051,6 +1062,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auto_resume_regression_remote_probe_ignores_stale_quota_errors() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("cockpit-ag-probe-{}", uuid::Uuid::new_v4()));
+        let db_home = root.join("antigravity");
+        std::fs::create_dir_all(&db_home).unwrap();
+        let db = rusqlite::Connection::open(db_home.join("conversation_summaries.db")).unwrap();
+        db.execute_batch("CREATE TABLE conversation_summaries (conversation_id TEXT,title TEXT,preview TEXT,status TEXT,not_fully_idle INTEGER,killed INTEGER,last_modified_time TEXT,workspace_uris TEXT)").unwrap();
+        for (id, age) in [("stale", 20), ("current", 0)] {
+            let timestamp = (Utc::now() - chrono::Duration::days(age)).to_rfc3339();
+            db.execute("INSERT INTO conversation_summaries VALUES (?, ?, '', 'CASCADE_RUN_STATUS_IDLE', 0, 1, ?, NULL)", rusqlite::params![id, id, timestamp]).unwrap();
+            let logs = db_home.join("brain").join(id).join(".system_generated/logs");
+            std::fs::create_dir_all(&logs).unwrap();
+            std::fs::write(logs.join("transcript.jsonl"), r#"{"status":"ERROR","error":"RESOURCE_EXHAUSTED 429"}"#).unwrap();
+        }
+        let mut child = std::process::Command::new("python3").arg("-").env("ANTIGRAVITY_HOME", &root)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(PYTHON_REMOTE_PROBE.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        let json = text.split("__ANTIGRAVITY_PROBE_JSON_START__").nth(1).unwrap().split("__ANTIGRAVITY_PROBE_JSON_END__").next().unwrap();
+        let tasks: Vec<InterruptedAntigravityTask> = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].thread_id, "current");
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn auto_resume_regression_macos_custom_home_and_cli_failure() {
         use std::io::Write;
         use base64::{engine::general_purpose::STANDARD, Engine};
@@ -1058,12 +1098,13 @@ mod tests {
         std::fs::create_dir_all(dir.join("antigravity/bin")).unwrap();
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         let agentapi = dir.join("antigravity/bin/agentapi");
-        std::fs::write(&agentapi, "#!/bin/sh\n[ \"$ANTIGRAVITY_LS_ADDRESS\" = localhost:54321 ] || exit 9\nexit 0\n").unwrap();
+        std::fs::write(&agentapi, "#!/bin/sh\n[ \"$ANTIGRAVITY_LS_ADDRESS\" = localhost:54321 ] || exit 9\n[ \"$ANTIGRAVITY_CSRF_TOKEN\" = fixture-secret ] || exit 8\nexit 0\n").unwrap();
         std::fs::write(dir.join("bin/lsof"), "#!/bin/sh\necho 'language_server 1 user TCP 127.0.0.1:54321 LISTEN'\n").unwrap();
         std::fs::write(dir.join("bin/agy"), "#!/bin/sh\nexit 5\n").unwrap();
+        std::fs::write(dir.join("bin/ps"), "#!/bin/sh\necho '1 /Applications/Antigravity.app/Contents/Resources/bin/language_server --csrf_token fixture-secret'\n").unwrap();
         #[cfg(unix)] {
             use std::os::unix::fs::PermissionsExt;
-            for path in [&agentapi, &dir.join("bin/lsof"), &dir.join("bin/agy")] {
+            for path in [&agentapi, &dir.join("bin/lsof"), &dir.join("bin/agy"), &dir.join("bin/ps")] {
                 std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
             }
         }

@@ -1111,6 +1111,40 @@ pub fn build_antigravity_projection_bundle(
     })
 }
 
+const MACOS_KEYCHAIN_GUI_SCRIPT: &str = r#"
+if [ "$(uname -s)" = "Darwin" ]; then
+  if ! security add-generic-password -U -s gemini -a antigravity -w 'go-keyring-base64:__PAYLOAD__' -A >/dev/null 2>&1; then
+    python3 - '__PAYLOAD__' <<'KEYCHAIN_GUI_PY'
+import os,sys,time,tempfile,pathlib,plistlib,subprocess,shutil,uuid
+with tempfile.TemporaryDirectory(prefix='cockpit-keychain-') as root:
+    folder=pathlib.Path(root)
+    label='com.cockpit.antigravity-auth.' + str(uuid.uuid4())
+    runner=folder/'runner.py'
+    runner.write_text('import subprocess,sys,pathlib\nargs=sys.argv[2:]\nresult=subprocess.run(args,capture_output=True,text=True)\nif result.returncode and \"-U\" in args:\n deleted=subprocess.run([args[0],\"delete-generic-password\",\"-s\",\"gemini\",\"-a\",\"antigravity\"],capture_output=True,text=True)\n if deleted.returncode==0:\n  args.remove(\"-U\")\n  result=subprocess.run(args,capture_output=True,text=True)\npathlib.Path(sys.argv[1]).write_text(str(result.returncode))\nsys.exit(result.returncode)\n')
+    runner.chmod(0o700)
+    result=folder/'result'
+    program=[sys.executable,str(runner),str(result),shutil.which('security') or '/usr/bin/security',
+        'add-generic-password','-U','-s','gemini','-a','antigravity','-w','go-keyring-base64:'+sys.argv[1],'-A']
+    plist=folder/'job.plist'
+    plist.write_bytes(plistlib.dumps(dict(Label=label,ProgramArguments=program,RunAtLoad=True,
+        StandardOutPath=str(folder/'out'),StandardErrorPath=str(folder/'err'))))
+    plist.chmod(0o600)
+    domain='gui/'+str(os.getuid())
+    boot=subprocess.run(['launchctl','bootstrap',domain,str(plist)],capture_output=True,text=True)
+    if boot.returncode:
+        raise SystemExit('macos_keychain_gui_unavailable: log in to the remote Mac desktop before syncing')
+    try:
+        deadline=time.monotonic()+15
+        while not result.exists() and time.monotonic()<deadline: time.sleep(0.1)
+        if not result.exists() or result.read_text().strip()!='0':
+            raise SystemExit('macos_keychain_gui_write_failed: unlock the remote login Keychain and allow credential access')
+    finally:
+        subprocess.run(['launchctl','bootout',domain+'/'+label],capture_output=True)
+KEYCHAIN_GUI_PY
+  fi
+fi
+"#;
+
 fn build_antigravity_upload_script(bundle: &AntigravityAccountProjectionBundle) -> String {
     let mut payload = String::new();
     for file in &bundle.files {
@@ -1124,7 +1158,7 @@ fn build_antigravity_upload_script(bundle: &AntigravityAccountProjectionBundle) 
     }
     let keyring_payload_b64 = STANDARD.encode(bundle.keyring_payload.as_bytes());
 
-    format!(
+    let script = format!(
         r#"set -eu
 antigravity_home=$1
 case "$antigravity_home" in
@@ -1166,11 +1200,7 @@ cat <<'__COCKPIT_ANTIGRAVITY_PAYLOAD__' | while IFS='	' read -r rel mode expecte
   printf '%s\t%s\n' "$rel" "$actual"
 done
 
-# Antigravity on macOS reads the same go-keyring credential as the local app.
-if [ "$(uname -s)" = "Darwin" ]; then
-  security add-generic-password -U -s gemini -a antigravity \
-    -w 'go-keyring-base64:{keyring_payload_b64}' -A >/dev/null
-fi
+__COCKPIT_MACOS_KEYCHAIN__
 
 # Try updating Linux Secret Service (GNOME Keyring / secret-tool / python dbus) if active user bus exists
 USER_BUS="/run/user/$(id -u)/bus"
@@ -1239,7 +1269,8 @@ EOF_AGY
   fi
 done
 "#
-    )
+    );
+    script.replace("__COCKPIT_MACOS_KEYCHAIN__", &MACOS_KEYCHAIN_GUI_SCRIPT.replace("__PAYLOAD__", &keyring_payload_b64))
 }
 
 async fn upload_and_verify_antigravity_bundle(
@@ -1544,6 +1575,35 @@ mod tests {
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    #[test]
+    fn macos_keychain_falls_back_to_the_logged_in_gui_session() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cockpit-keychain-gui-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let fixtures = [
+            ("uname", "#!/bin/sh\necho Darwin\n"),
+            ("security", "#!/bin/sh\n[ \"$COCKPIT_GUI_TEST\" = 1 ] || exit 1\n[ \"$2\" != -U ] || exit 1\nprintf '%s\\n' \"$@\" > \"$HOME/gui-keychain-call\"\n"),
+            ("launchctl", "#!/usr/bin/python3\nimport sys,plistlib,subprocess,os\nif sys.argv[1]=='bootstrap':\n p=plistlib.load(open(sys.argv[-1],'rb'))\n sys.exit(subprocess.run(p['ProgramArguments'],env=dict(os.environ,COCKPIT_GUI_TEST='1')).returncode)\n")
+        ];
+        for (name, text) in fixtures {
+            let path = dir.join("bin").join(name);
+            std::fs::write(&path, text).unwrap();
+            #[cfg(unix)] {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        let script = MACOS_KEYCHAIN_GUI_SCRIPT.replace("__PAYLOAD__", "ZHVtbXk=");
+        let mut child = std::process::Command::new("sh").arg("-s")
+            .env("HOME", &dir).env("PATH", format!("{}:/usr/bin:/bin", dir.join("bin").display()))
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(std::fs::read_to_string(dir.join("gui-keychain-call")).unwrap().contains("go-keyring-base64:ZHVtbXk="));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
