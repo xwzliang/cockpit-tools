@@ -386,13 +386,24 @@ fn add_codex_app_server_candidates(candidates: &mut Vec<PathBuf>) {
 
     #[cfg(target_os = "macos")]
     for executable in CODEX_APP_SERVER_MACOS_EXECUTABLES {
-        push_candidate(candidates, PathBuf::from(executable));
+        push_candidate_from_codex_launch_path(candidates, Path::new(executable));
     }
 }
 
 fn push_candidate_from_codex_launch_path(candidates: &mut Vec<PathBuf>, launch_path: &Path) {
     if let Some(app_server_path) = app_server_executable_from_codex_launch_path(launch_path) {
-        push_candidate(candidates, app_server_path);
+        // Recent desktop bundles moved the CLI below Resources/codex-cli.
+        // Keep the legacy executable first for older installations.
+        if let Some(resources) = app_server_path.parent() {
+            let bundled_cli = resources.join("codex-cli").join("bin").join("codex");
+            let nested_cli = resources.join("codex-cli").join("CodexCLI.app")
+                .join("Contents").join("MacOS").join("codex");
+            push_candidate(candidates, app_server_path);
+            push_candidate(candidates, bundled_cli);
+            push_candidate(candidates, nested_cli);
+        } else {
+            push_candidate(candidates, app_server_path);
+        }
     }
 }
 
@@ -574,6 +585,15 @@ fn finish_child(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovers_new_desktop_cli_layout_alongside_legacy_layout() {
+        let mut candidates = Vec::new();
+        push_candidate_from_codex_launch_path(&mut candidates, Path::new("/Applications/ChatGPT.app"));
+        assert_eq!(candidates[0], PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex"));
+        assert!(candidates.contains(&PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")));
+        assert!(candidates.contains(&PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")));
+    }
 
     #[test]
     fn maps_macos_launch_binary_to_resources_app_server() {
