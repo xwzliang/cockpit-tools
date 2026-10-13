@@ -105,6 +105,11 @@ fn collect_ssh_config_hosts(
     Ok(())
 }
 
+pub(crate) fn remote_python_with_home(script: &str, variable: &str, home: &str) -> String {
+    let home = serde_json::to_string(home).expect("serialize remote home");
+    format!("import os\nos.environ[{variable:?}] = os.path.expanduser({home})\n{script}")
+}
+
 fn now_timestamp() -> i64 {
     chrono::Utc::now().timestamp()
 }
@@ -505,12 +510,12 @@ pub async fn test_connection(server_id: &str) -> Result<String, String> {
     }
 }
 
-async fn read_remote_config_toml(server: &SshServer) -> Result<Option<String>, String> {
-    let script = r#"set -eu
+fn read_remote_config_script() -> &'static str {
+    r#"set -eu
 codex_home=$1
 case "$codex_home" in
   "~") codex_home="$HOME" ;;
-  "~/"*) codex_home="$HOME/${{codex_home#~/}}" ;;
+  "~/"*) codex_home="$HOME/${codex_home#??}" ;;
 esac
 target="$codex_home/config.toml"
 if [ -f "$target" ]; then
@@ -522,7 +527,11 @@ elif [ -e "$target" ]; then
 else
   printf '__COCKPIT_MISSING__\n'
 fi
-"#;
+"#
+}
+
+async fn read_remote_config_toml(server: &SshServer) -> Result<Option<String>, String> {
+    let script = read_remote_config_script();
     let output = run_ssh(
         server,
         SYNC_TIMEOUT_SECS,
@@ -540,10 +549,7 @@ fi
     Err("ssh_remote_read_failed: unexpected remote read response".to_string())
 }
 
-async fn upload_and_verify_bundle(
-    server: &SshServer,
-    bundle: &codex_account::CodexAccountProjectionBundle,
-) -> Result<(), String> {
+fn build_codex_upload_script(bundle: &codex_account::CodexAccountProjectionBundle) -> String {
     let mut payload = String::new();
     for file in &bundle.files {
         payload.push_str(&format!(
@@ -554,12 +560,12 @@ async fn upload_and_verify_bundle(
             STANDARD.encode(file.content.as_bytes())
         ));
     }
-    let script = format!(
+    format!(
         r#"set -eu
 codex_home=$1
 case "$codex_home" in
   "~") codex_home="$HOME" ;;
-  "~/"*) codex_home="$HOME/${{codex_home#~/}}" ;;
+  "~/"*) codex_home="$HOME/${{codex_home#??}}" ;;
 esac
 mkdir -p "$codex_home"
 chmod 700 "$codex_home" 2>/dev/null || true
@@ -583,7 +589,12 @@ cat <<'__COCKPIT_CODEX_PAYLOAD__' | while IFS='	' read -r rel mode expected enco
   chmod "$mode" "$tmp" 2>/dev/null || true
   mv "$tmp" "$target"
   chmod "$mode" "$target" 2>/dev/null || true
-  actual="$(sha256sum "$target" 2>/dev/null | awk '{{print $1}}' || shasum -a 256 "$target" | awk '{{print $1}}')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    hash_output="$(sha256sum "$target")"
+  else
+    hash_output="$(shasum -a 256 "$target")"
+  fi
+  actual="$(printf '%s\n' "$hash_output" | awk '{{print $1}}')"
   if [ "$actual" != "$expected" ]; then
     printf 'hash mismatch for %s\n' "$rel" >&2
     exit 5
@@ -591,7 +602,14 @@ cat <<'__COCKPIT_CODEX_PAYLOAD__' | while IFS='	' read -r rel mode expected enco
   printf '%s\t%s\n' "$rel" "$actual"
 done
 "#
-    );
+    )
+}
+
+async fn upload_and_verify_bundle(
+    server: &SshServer,
+    bundle: &codex_account::CodexAccountProjectionBundle,
+) -> Result<(), String> {
+    let script = build_codex_upload_script(bundle);
     let output = run_ssh(
         server,
         SYNC_TIMEOUT_SECS,
@@ -624,9 +642,24 @@ os_platform="$(uname -s 2>/dev/null || echo Unknown)"
 codex_home="$1"
 case "$codex_home" in
   "~") codex_home="$HOME" ;;
-  "~/"*) codex_home="$HOME/${codex_home#~/}" ;;
+  "~/"*) codex_home="$HOME/${codex_home#??}" ;;
 esac
 [ -n "$codex_home" ] || codex_home="$HOME/.codex"
+export CODEX_HOME="$codex_home"
+
+if [ "$os_platform" = "Darwin" ]; then
+  for app in "$HOME/Applications/ChatGPT.app" /Applications/ChatGPT.app "$HOME/Applications/Codex.app" /Applications/Codex.app; do
+    [ -d "$app" ] || continue
+    name="$(basename "$app" .app)"
+    pids="$(ps -u "$(id -u)" -o pid= -o comm= | awk -v executable="$app/Contents/MacOS/$name" '$2 == executable { print $1 }')"
+    [ -n "$pids" ] || continue
+    kill -TERM $pids || exit 1
+    sleep 2
+    open -a "$app" || exit 1
+    printf 'desktop-relaunched\n'
+    exit 0
+  done
+fi
 
 if [ "$os_platform" = "Linux" ]; then
   chmod 600 "$codex_home/auth.json" 2>/dev/null || true
@@ -829,7 +862,7 @@ async fn reload_remote_codex_app_server(server: &SshServer) -> Result<(), String
     let recognized_status = output.lines().map(str::trim).find(|line| {
         matches!(
             *line,
-            "daemon-restarted" | "app-server-terminated" | "no-app-server"
+            "daemon-restarted" | "app-server-terminated" | "no-app-server" | "desktop-relaunched"
         ) || line.starts_with("linux-codex-restarted")
     });
 
@@ -1078,10 +1111,7 @@ pub fn build_antigravity_projection_bundle(
     })
 }
 
-async fn upload_and_verify_antigravity_bundle(
-    server: &SshServer,
-    bundle: &AntigravityAccountProjectionBundle,
-) -> Result<(), String> {
+fn build_antigravity_upload_script(bundle: &AntigravityAccountProjectionBundle) -> String {
     let mut payload = String::new();
     for file in &bundle.files {
         payload.push_str(&format!(
@@ -1094,12 +1124,12 @@ async fn upload_and_verify_antigravity_bundle(
     }
     let keyring_payload_b64 = STANDARD.encode(bundle.keyring_payload.as_bytes());
 
-    let script = format!(
+    format!(
         r#"set -eu
 antigravity_home=$1
 case "$antigravity_home" in
   "~") antigravity_home="$HOME" ;;
-  "~/"*) antigravity_home="$HOME/${{antigravity_home#~/}}" ;;
+  "~/"*) antigravity_home="$HOME/${{antigravity_home#??}}" ;;
 esac
 mkdir -p "$antigravity_home"
 chmod 700 "$antigravity_home" 2>/dev/null || true
@@ -1123,13 +1153,24 @@ cat <<'__COCKPIT_ANTIGRAVITY_PAYLOAD__' | while IFS='	' read -r rel mode expecte
   chmod "$mode" "$tmp" 2>/dev/null || true
   mv "$tmp" "$target"
   chmod "$mode" "$target" 2>/dev/null || true
-  actual="$(sha256sum "$target" 2>/dev/null | awk '{{print $1}}' || shasum -a 256 "$target" | awk '{{print $1}}')"
+  if command -v sha256sum >/dev/null 2>&1; then
+    hash_output="$(sha256sum "$target")"
+  else
+    hash_output="$(shasum -a 256 "$target")"
+  fi
+  actual="$(printf '%s\n' "$hash_output" | awk '{{print $1}}')"
   if [ "$actual" != "$expected" ]; then
     printf 'hash mismatch for %s\n' "$rel" >&2
     exit 5
   fi
   printf '%s\t%s\n' "$rel" "$actual"
 done
+
+# Antigravity on macOS reads the same go-keyring credential as the local app.
+if [ "$(uname -s)" = "Darwin" ]; then
+  security add-generic-password -U -s gemini -a antigravity \
+    -w 'go-keyring-base64:{keyring_payload_b64}' -A >/dev/null
+fi
 
 # Try updating Linux Secret Service (GNOME Keyring / secret-tool / python dbus) if active user bus exists
 USER_BUS="/run/user/$(id -u)/bus"
@@ -1198,7 +1239,14 @@ EOF_AGY
   fi
 done
 "#
-    );
+    )
+}
+
+async fn upload_and_verify_antigravity_bundle(
+    server: &SshServer,
+    bundle: &AntigravityAccountProjectionBundle,
+) -> Result<(), String> {
+    let script = build_antigravity_upload_script(bundle);
     let output = run_ssh(
         server,
         SYNC_TIMEOUT_SECS,
@@ -1257,6 +1305,21 @@ fn persist_antigravity_sync_status(
 
 fn reload_antigravity_script() -> &'static str {
     r#"set -eu
+if [ "$(uname -s)" = "Darwin" ]; then
+  for app in "$HOME/Applications/Antigravity.app" /Applications/Antigravity.app; do
+    [ -d "$app" ] || continue
+    pids="$(ps -u "$(id -u)" -o pid= -o comm= | awk -v executable="$app/Contents/MacOS/Antigravity" '$2 == executable { print $1 }')"
+    [ -n "$pids" ] || continue
+    kill -TERM $pids || exit 1
+    sleep 2
+    open -a "$app" || exit 1
+    printf 'desktop-relaunched\n'
+    exit 0
+  done
+  printf 'no-antigravity-process\n'
+  exit 0
+fi
+
 main_pid=""
 main_exe=""
 main_display=""
@@ -1481,6 +1544,52 @@ mod tests {
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    #[test]
+    fn macos_sync_scripts_expand_homes_verify_hashes_and_write_keychain() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("cockpit-macos-sync-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin/uname"), "#!/bin/sh\necho Darwin\n").unwrap();
+        std::fs::write(dir.join("bin/security"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/keychain-call\"\n").unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["uname", "security"] {
+                std::fs::set_permissions(dir.join("bin").join(name), std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        let content = "dummy credential";
+        let hash = sha256_hex_bytes(content.as_bytes());
+        let codex: codex_account::CodexAccountProjectionBundle = serde_json::from_value(serde_json::json!({
+            "account_id":"test", "account_email":"test@example.com", "token_generation":1,
+            "bundle_hash":"test", "files":[{"relative_path":"auth.json", "mode":384, "sha256":hash, "content":content}]
+        })).unwrap();
+        let ag: AntigravityAccountProjectionBundle = serde_json::from_value(serde_json::json!({
+            "account_id":"test", "account_email":"test@example.com", "bundle_hash":"test", "keyring_payload":"dummy keyring",
+            "files":[{"relative_path":"jetski-standalone-oauth-token", "mode":384, "sha256":hash, "content":content}]
+        })).unwrap();
+        let scripts = [("codex", build_codex_upload_script(&codex), "~/.codex", "auth.json"),
+            ("antigravity", build_antigravity_upload_script(&ag), "~/.gemini", "jetski-standalone-oauth-token")];
+        for (name, script, home, file) in scripts {
+            if let Ok(export) = std::env::var("COCKPIT_SSH_FIXTURE_EXPORT_DIR") {
+                std::fs::create_dir_all(&export).unwrap();
+                std::fs::write(std::path::Path::new(&export).join(format!("{}.sh", name)), &script).unwrap();
+            }
+            let mut child = std::process::Command::new("sh").args(["-s", "--", home])
+                .env("HOME", &dir).env("PATH", format!("{}:/usr/bin:/bin", dir.join("bin").display()))
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+            child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            assert_eq!(std::fs::read_to_string(dir.join(&home[2..]).join(file)).unwrap(), content);
+            assert!(String::from_utf8_lossy(&output.stdout).contains(&hash));
+        }
+        let keychain = std::fs::read_to_string(dir.join("keychain-call")).unwrap();
+        assert!(keychain.contains("-s\ngemini\n-a\nantigravity"));
+        assert!(keychain.contains("go-keyring-base64:"));
+        assert!(!dir.join("~").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -644,12 +644,26 @@ def resume_thread(thread_id, is_goal, prompt, cwd=None, model=None):
                 return {"success": False, "message": f"Codex 通信异常: {str(e)}"}
 
     # Fallback to CLI only if app-server socket is not connected
-    codex_bin = subprocess.getoutput("which codex").strip() or str(Path.home() / ".local/bin/codex")
+    import shutil
+    candidates = [shutil.which("codex"), str(Path.home() / ".local/bin/codex"),
+        "/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
+    for root in [Path.home() / "Applications", Path("/Applications")]:
+        for name in ["ChatGPT.app", "Codex.app"]:
+            resources = root / name / "Contents/Resources"
+            candidates.extend([str(resources / "codex"), str(resources / "codex-cli/bin/codex")])
+    codex_bin = next((path for path in candidates if path and os.path.isfile(path) and os.access(path, os.X_OK)), None)
+    if not codex_bin:
+        return {"success": False, "message": "No executable Codex CLI or desktop owner found"}
     target_cwd = cwd if (cwd and os.path.isdir(cwd)) else str(Path.home())
     log_file = codex_home / f"auto_resume_{thread_id}.log"
-    cmd = [codex_bin, "exec", "resume", "--skip-git-repo-check", thread_id, prompt]
+    cmd = [codex_bin, "exec", "resume", "--skip-git-repo-check"]
+    if model: cmd.extend(["--model", model])
+    cmd.extend([thread_id, prompt])
     with open(log_file, "a") as f:
-        subprocess.Popen(cmd, cwd=target_cwd, stdout=f, stderr=f, stdin=subprocess.DEVNULL, start_new_session=True)
+        child = subprocess.Popen(cmd, cwd=target_cwd, stdout=f, stderr=f, stdin=subprocess.DEVNULL, start_new_session=True)
+    time.sleep(1)
+    if child.poll() is not None and child.returncode != 0:
+        return {"success": False, "message": f"Codex exited with code {child.returncode}; see {log_file}"}
     return {"success": True, "mode": "cli", "message": f"已通过 Codex CLI 后台启动恢复任务: {thread_id}"}
 
 try:
@@ -1214,7 +1228,7 @@ pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedCo
         server,
         25,
         &["python3", "-"],
-        Some(PYTHON_REMOTE_PROBE.to_string()),
+        Some(ssh_server::remote_python_with_home(PYTHON_REMOTE_PROBE, "CODEX_HOME", &server.codex_home)),
     )
     .await?;
 
@@ -1461,7 +1475,7 @@ async fn resume_task_internal(
             &server,
             25,
             &["python3", "-", &b64_json],
-            Some(PYTHON_RESUME_HELPER.to_string()),
+            Some(ssh_server::remote_python_with_home(PYTHON_RESUME_HELPER, "CODEX_HOME", &server.codex_home)),
         )
         .await?;
 
@@ -1489,42 +1503,12 @@ async fn resume_task_internal(
                         .get("message")
                         .and_then(|v| v.as_str())
                         .unwrap_or("远端 Python 执行失败");
-                    if val.get("mode").and_then(|v| v.as_str()) == Some("desktop-ipc") {
-                        return Err(err.to_string());
-                    }
-                    logger::log_warn(&format!(
-                        "[CodexAutoResume] 服务器【{}】Python 恢复未成功 ({})，尝试 CLI 降级: thread_id={}",
-                        server.name, err, task.thread_id
-                    ));
+                    return Err(err.to_string());
                 }
             }
         }
 
-        // Fallback to nohup bash script if python helper didn't return expected JSON
-        let safe_cwd = task.cwd.as_deref().unwrap_or("$HOME");
-        let escaped_prompt = prompt.replace('\'', "'\\''");
-        let remote_script = format!(
-            "export PATH=\"$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:$PATH\"\n\
-             CODEX_BIN=$(which codex 2>/dev/null || echo \"$HOME/.local/bin/codex\")\n\
-             cd \"{}\" 2>/dev/null || cd \"$HOME\"\n\
-             nohup \"$CODEX_BIN\" exec resume --skip-git-repo-check \"{}\" '{}' > \"$HOME/.codex/auto_resume_{}.log\" 2>&1 &",
-            safe_cwd, task.thread_id, escaped_prompt, task.thread_id
-        );
-
-        ssh_server::run_ssh(&server, 20, &["bash", "-c", &remote_script], None).await?;
-
-        logger::log_info(&format!(
-            "[CodexAutoResume] 成功在 SSH 服务器【{}】启动任务恢复(CLI降级): thread_id={}",
-            server.name, task.thread_id
-        ));
-
-        Ok(ResumeTaskResult {
-            success: true,
-            message: format!(
-                "已在服务器【{}】后台启动恢复任务: {}",
-                server.name, task.thread_id
-            ),
-        })
+        Err(format!("SSH server {} did not return a valid recovery result", server.name))
     } else {
         Err(format!("未知任务来源: {}", task.source))
     }
@@ -1915,7 +1899,7 @@ async fn recovery_progress(retry: &RecoveryRetry) -> RecoveryProgress {
         let server = ssh_server::list_servers().ok().and_then(|list| list.servers.into_iter()
             .find(|server| Some(server.id.as_str()) == retry.task.server_id.as_deref()));
         match server {
-            Some(server) => ssh_server::run_ssh(&server, 25, &["python3", "-", &encoded], Some(PYTHON_RECOVERY_PROGRESS.to_string())).await,
+            Some(server) => ssh_server::run_ssh(&server, 25, &["python3", "-", &encoded], Some(ssh_server::remote_python_with_home(PYTHON_RECOVERY_PROGRESS, "CODEX_HOME", &server.codex_home))).await,
             None => Err("Recovery server unavailable".to_string()),
         }
     };
@@ -2222,6 +2206,38 @@ pub async fn check_and_auto_apply_expiring_resets(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_resume_regression_macos_bundled_cli_and_model_preservation() {
+        use std::io::Write;
+        let definitions = PYTHON_RESUME_HELPER.split("\ntry:\n    raw_arg").next().unwrap();
+        let test = r#"
+import tempfile, shutil
+with tempfile.TemporaryDirectory() as root:
+    os.environ['CODEX_HOME'] = root
+    resume_desktop_owner = lambda *args: None
+    shutil.which = lambda name: None
+    time.sleep = lambda seconds: None
+    os.access = lambda *args: True
+    captured = []
+    class Child:
+        returncode = 5
+        def poll(self): return self.returncode
+    subprocess.Popen = lambda cmd, **kwargs: (captured.append(cmd) or Child())
+    for binary in ['/Applications/ChatGPT.app/Contents/Resources/codex',
+                   '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex']:
+        os.path.isfile = lambda path: path == binary
+        result = resume_thread('fixture', False, 'Continue', root, 'saved-model')
+        assert not result['success'], result
+        assert captured[-1][0] == binary
+        assert captured[-1][-4:] == ['--model', 'saved-model', 'fixture', 'Continue']
+"#;
+        let mut child = std::process::Command::new("python3").arg("-")
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(format!("{}\n{}", definitions, test).as_bytes()).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
 
     #[test]
     fn auto_resume_regression_backoff_continues_without_a_retry_limit() {

@@ -206,12 +206,12 @@ def parse_iso_time(s):
         return int(time.time())
 
 def check_task():
-    home = os.path.expanduser('~')
+    home = os.path.expanduser(os.environ.get('ANTIGRAVITY_HOME', '~/.gemini'))
     results = []
     db_candidates = [
-        os.path.join(home, '.gemini', 'antigravity-cli', 'conversation_summaries.db'),
-        os.path.join(home, '.gemini', 'antigravity', 'conversation_summaries.db'),
-        os.path.join(home, '.gemini', 'conversation_summaries.db')
+        os.path.join(home, 'antigravity-cli', 'conversation_summaries.db'),
+        os.path.join(home, 'antigravity', 'conversation_summaries.db'),
+        os.path.join(home, 'conversation_summaries.db')
     ]
     seen_ids = set()
 
@@ -543,7 +543,7 @@ pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedAn
         server,
         15,
         &["python3", "-"],
-        Some(PYTHON_REMOTE_PROBE.to_string()),
+        Some(ssh_server::remote_python_with_home(PYTHON_REMOTE_PROBE, "ANTIGRAVITY_HOME", &server.antigravity_home)),
     )
     .await?;
 
@@ -760,37 +760,71 @@ async fn resume_local_task(thread_id: &str, prompt: &str) -> Result<ResumeTaskRe
     Err(format!("未找到可用的 Antigravity 恢复入口，请确保 Antigravity IDE 或 agy 运行中"))
 }
 
+const PYTHON_REMOTE_RESUME: &str = r#"
+import os, sys, json, base64, shutil, subprocess, time
+from pathlib import Path
+args = json.loads(base64.b64decode(sys.argv[1]))
+home = Path(os.environ.get('ANTIGRAVITY_HOME', str(Path.home() / '.gemini'))).expanduser()
+cid, prompt = args['thread_id'], args['prompt']
+def resume():
+    agentapis = [home / folder / 'bin/agentapi' for folder in ('antigravity', 'antigravity-cli')]
+    agentapi = next((str(p) for p in agentapis if p.is_file() and os.access(p, os.X_OK)), None)
+    if agentapi:
+        ports = []
+        try:
+            out = subprocess.run(['lsof', '-iTCP', '-sTCP:LISTEN', '-n', '-P'], capture_output=True, text=True, timeout=5)
+            for line in out.stdout.splitlines():
+                if 'language_' in line or 'language_server' in line:
+                    for word in line.split():
+                        if word.startswith('127.0.0.1:'):
+                            ports.append(word.rsplit(':', 1)[1])
+        except Exception: pass
+        for port in dict.fromkeys(ports):
+            if not port.isdigit(): continue
+            env = dict(os.environ, ANTIGRAVITY_LS_ADDRESS='localhost:' + port)
+            probe = subprocess.run([agentapi, 'get-conversation-metadata', cid], env=env, capture_output=True, text=True, timeout=5)
+            if probe.returncode: continue
+            out = subprocess.run([agentapi, 'send-message', cid, prompt], env=env, capture_output=True, text=True, timeout=10)
+            if out.returncode:
+                return {'success': False, 'message': out.stderr.strip() or 'Antigravity API rejected recovery'}
+            return {'success': True, 'message': 'Restored through running Antigravity API'}
+    candidates = [shutil.which('agy'), str(Path.home() / '.local/bin/agy'),
+        '/opt/homebrew/bin/agy', '/usr/local/bin/agy',
+        '/Applications/Antigravity.app/Contents/Resources/app/bin/agy']
+    agy = next((p for p in candidates if p and os.path.isfile(p) and os.access(p, os.X_OK)), None)
+    if not agy:
+        return {'success': False, 'message': 'No executable agy or running Antigravity API found'}
+    home.mkdir(parents=True, exist_ok=True)
+    # Keep diagnostics instead of reporting success for an immediately failed process.
+    log = home / ('auto_resume_' + ''.join(c for c in cid if c.isalnum() or c in '-_') + '.log')
+    with log.open('a') as output:
+        child = subprocess.Popen([agy, '--conversation', cid, '--dangerously-skip-permissions', '--print', prompt],
+            stdin=subprocess.DEVNULL, stdout=output, stderr=output, start_new_session=True)
+    time.sleep(1)
+    code = child.poll()
+    if code is not None and code != 0:
+        return {'success': False, 'message': 'agy exited with code ' + str(code) + '; see ' + str(log)}
+    return {'success': True, 'message': 'Started Antigravity recovery; log: ' + str(log)}
+try:
+    result = resume()
+except Exception as error:
+    result = {'success': False, 'message': str(error)}
+print('__ANTIGRAVITY_RESUME_RESULT__' + json.dumps(result))
+"#;
+
 async fn resume_remote_task(
     server: &SshServer,
     thread_id: &str,
     prompt: &str,
 ) -> Result<ResumeTaskResult, String> {
-    let escaped_prompt = prompt.replace('\'', "'\\''");
-    let remote_script = format!(
-        "export PATH=\"$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH\"\n\
-        if command -v agy >/dev/null 2>&1; then\n\
-            nohup agy --conversation '{cid}' --dangerously-skip-permissions --print '{prompt}' >/tmp/agy_resume_{cid}.log 2>&1 &\n\
-            echo '__RESUME_SUCCESS__'\n\
-        elif [ -x \"$HOME/.gemini/antigravity-cli/bin/agentapi\" ]; then\n\
-            nohup \"$HOME/.gemini/antigravity-cli/bin/agentapi\" send-message '{cid}' '{prompt}' >/tmp/agy_resume_{cid}.log 2>&1 &\n\
-            echo '__RESUME_SUCCESS__'\n\
-        else\n\
-            echo 'Error: Neither agy nor agentapi found on remote server'\n\
-        fi",
-        cid = thread_id,
-        prompt = escaped_prompt
-    );
-
-    let output = ssh_server::run_ssh(server, 20, &["bash", "-c", &remote_script], None).await?;
-
-    if output.contains("__RESUME_SUCCESS__") {
-        Ok(ResumeTaskResult {
-            success: true,
-            message: format!("已在 SSH 服务器【{}】后台恢复任务: {}", server.name, thread_id),
-        })
-    } else {
-        Err(format!("在服务器【{}】恢复失败: {}", server.name, output.trim()))
-    }
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let encoded = STANDARD.encode(serde_json::json!({"thread_id": thread_id, "prompt": prompt}).to_string());
+    let script = ssh_server::remote_python_with_home(PYTHON_REMOTE_RESUME, "ANTIGRAVITY_HOME", &server.antigravity_home);
+    let output = ssh_server::run_ssh(server, 30, &["python3", "-", &encoded], Some(script)).await?;
+    let json = output.lines().find_map(|line| line.strip_prefix("__ANTIGRAVITY_RESUME_RESULT__"))
+        .ok_or_else(|| format!("Antigravity recovery did not return a result on {}", server.name))?;
+    let result: ResumeTaskResult = serde_json::from_str(json).map_err(|err| err.to_string())?;
+    if result.success { Ok(result) } else { Err(result.message) }
 }
 
 pub async fn resume_task(
@@ -1015,6 +1049,40 @@ pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_resume_regression_macos_custom_home_and_cli_failure() {
+        use std::io::Write;
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let dir = std::env::temp_dir().join(format!("cockpit-ag-recovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("antigravity/bin")).unwrap();
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        let agentapi = dir.join("antigravity/bin/agentapi");
+        std::fs::write(&agentapi, "#!/bin/sh\n[ \"$ANTIGRAVITY_LS_ADDRESS\" = localhost:54321 ] || exit 9\nexit 0\n").unwrap();
+        std::fs::write(dir.join("bin/lsof"), "#!/bin/sh\necho 'language_server 1 user TCP 127.0.0.1:54321 LISTEN'\n").unwrap();
+        std::fs::write(dir.join("bin/agy"), "#!/bin/sh\nexit 5\n").unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            for path in [&agentapi, &dir.join("bin/lsof"), &dir.join("bin/agy")] {
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        let encoded = STANDARD.encode(serde_json::json!({"thread_id":"test-thread", "prompt":"Continue 'quoted' task"}).to_string());
+        for expect_success in [true, false] {
+            if !expect_success { std::fs::remove_file(&agentapi).unwrap(); }
+            let mut child = std::process::Command::new("python3").args(["-", &encoded])
+                .env("ANTIGRAVITY_HOME", &dir).env("PATH", format!("{}:/usr/bin:/bin", dir.join("bin").display()))
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+            child.stdin.take().unwrap().write_all(PYTHON_REMOTE_RESUME.as_bytes()).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let text = String::from_utf8_lossy(&output.stdout);
+            let json = text.lines().find_map(|line| line.strip_prefix("__ANTIGRAVITY_RESUME_RESULT__")).unwrap();
+            let result: ResumeTaskResult = serde_json::from_str(json).unwrap();
+            assert_eq!(result.success, expect_success, "{}", result.message);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn test_task_exclusion_logic() {
