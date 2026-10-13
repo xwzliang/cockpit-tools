@@ -448,7 +448,7 @@ pub async fn refresh_current_quota(app: tauri::AppHandle) -> Result<(), String> 
     Ok(())
 }
 
-async fn switch_account_legacy_antigravity(
+pub(crate) async fn switch_account_legacy_antigravity(
     app: AppHandle,
     account_id: String,
 ) -> Result<models::Account, String> {

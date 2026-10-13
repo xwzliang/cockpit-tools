@@ -192,7 +192,7 @@ pub fn clear_resumed_task_records() -> Result<(), String> {
 }
 
 const PYTHON_REMOTE_PROBE: &str = r#"
-import os, sys, glob, json, sqlite3, time
+import os, sys, glob, json, sqlite3, time, tempfile, shutil
 
 def parse_iso_time(s):
     if not s: return 0
@@ -218,7 +218,14 @@ def check_task():
             continue
         root_dir = os.path.dirname(db_path)
         try:
-            conn = sqlite3.connect('file:' + db_path + '?mode=ro', uri=True)
+            # SQLite may need writable WAL sidecars even for a read-only query.
+            # Use a private snapshot so SSH never modifies the application's DB.
+            snapshot = tempfile.TemporaryDirectory(prefix='cockpit-ag-index-')
+            snapshot_path = os.path.join(snapshot.name, 'index.db')
+            shutil.copy2(db_path, snapshot_path)
+            if os.path.exists(db_path + '-wal'):
+                shutil.copy2(db_path + '-wal', snapshot_path + '-wal')
+            conn = sqlite3.connect(snapshot_path)
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT conversation_id, title, preview, status, not_fully_idle, killed, last_modified_time, workspace_uris
@@ -253,7 +260,7 @@ def check_task():
                     err = last_step.get('error') or ''
                     content = str(last_step.get('content', ''))
                     
-                    if st == 'ERROR' or err:
+                    if st == 'ERROR' or err or (last_step.get('type') == 'SYSTEM_MESSAGE' and 'RESOURCE_EXHAUSTED' in content):
                         is_interrupted = True
                         error_message = err or content[:250]
                         combined = (str(err) + ' ' + content).lower()
@@ -294,8 +301,11 @@ def check_task():
                         'updated_at': parse_iso_time(last_mod_str),
                         'can_resume': False
                     })
-        except Exception:
-            pass
+            conn.close()
+            snapshot.cleanup()
+        except Exception as error:
+            print('Antigravity index probe failed: ' + str(error), file=sys.stderr)
+            raise
 
     print('__ANTIGRAVITY_PROBE_JSON_START__')
     print(json.dumps(results))
@@ -441,10 +451,11 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
                                 last_step_created_at_ts = parse_iso_datetime_to_ts(c_at);
                             }
 
-                            if last_step_status.as_deref() == Some("ERROR") || err_str.is_some() {
+                            if last_step_status.as_deref() == Some("ERROR") || err_str.is_some()
+                                || (val.get("type").and_then(|v| v.as_str()) == Some("SYSTEM_MESSAGE") && content_str.contains("RESOURCE_EXHAUSTED")) {
                                 error_msg = err_str.map(str::to_string).or_else(|| {
                                     if !content_str.is_empty() {
-                                        Some(content_str[..content_str.len().min(250)].to_string())
+                                        Some(content_str.chars().take(250).collect())
                                     } else {
                                         None
                                     }
@@ -464,7 +475,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
 
             // If last step was modified in the last 20 seconds and finished cleanly (not ERROR), it is actively running in real-time
             if let Some(ts) = last_step_created_at_ts {
-                if now_ts - ts < 20 && last_step_status.as_deref() != Some("ERROR") {
+                if now_ts - ts < 20 && last_step_status.as_deref() != Some("ERROR") && !is_quota_limited {
                     continue;
                 }
             }
@@ -772,16 +783,17 @@ def resume():
         ports = []
         csrf_by_pid = {}
         try:
-            processes = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, timeout=5)
+            processes = subprocess.run(['ps', '-axww', '-o', 'pid=,command='], capture_output=True, text=True, errors='replace', timeout=5)
             for line in processes.stdout.splitlines():
                 if 'language_server' not in line: continue
-                command = shlex.split(line)
+                try: command = shlex.split(line)
+                except ValueError: continue
                 for i, arg in enumerate(command):
                     if arg == '--csrf_token' and i + 1 < len(command):
                         csrf_by_pid[command[0]] = command[i + 1]
                     elif arg.startswith('--csrf_token='):
                         csrf_by_pid[command[0]] = arg.split('=', 1)[1]
-            out = subprocess.run(['lsof', '-iTCP', '-sTCP:LISTEN', '-n', '-P'], capture_output=True, text=True, timeout=5)
+            out = subprocess.run([shutil.which('lsof') or '/usr/sbin/lsof', '-iTCP', '-sTCP:LISTEN', '-n', '-P'], capture_output=True, text=True, errors='replace', timeout=5)
             for line in out.stdout.splitlines():
                 if 'language_' in line or 'language_server' in line:
                     for word in line.split():
@@ -862,6 +874,18 @@ pub async fn resume_task(
             .find(|s| s.id == server_id)
             .ok_or_else(|| format!("未找到目标 SSH 服务器: {}", server_id))?;
 
+        let current = crate::modules::account::get_current_account()?
+            .ok_or_else(|| "No current Antigravity account".to_string())?;
+        let bundle = ssh_server::build_antigravity_projection_bundle(&current)?;
+        let synced = server.last_antigravity_sync.as_ref().map(|status|
+            status.verified && status.account_id == current.id && status.bundle_hash == bundle.bundle_hash
+        ).unwrap_or(false);
+        if !synced {
+            let sync = ssh_server::sync_current_antigravity_account_to_server(Some(server_id.to_string())).await?;
+            if !sync.verified {
+                return Err(sync.error.unwrap_or_else(|| "Remote Antigravity auth sync failed".to_string()));
+            }
+        }
         resume_remote_task(server, &task.thread_id, &prompt).await
     } else {
         Err(format!("未知任务来源: {}", task.source))
@@ -1069,12 +1093,12 @@ mod tests {
         std::fs::create_dir_all(&db_home).unwrap();
         let db = rusqlite::Connection::open(db_home.join("conversation_summaries.db")).unwrap();
         db.execute_batch("CREATE TABLE conversation_summaries (conversation_id TEXT,title TEXT,preview TEXT,status TEXT,not_fully_idle INTEGER,killed INTEGER,last_modified_time TEXT,workspace_uris TEXT)").unwrap();
-        for (id, age) in [("stale", 20), ("current", 0)] {
+        for (id, age) in [("stale", 20), ("current", 0), ("system", 0)] {
             let timestamp = (Utc::now() - chrono::Duration::days(age)).to_rfc3339();
             db.execute("INSERT INTO conversation_summaries VALUES (?, ?, '', 'CASCADE_RUN_STATUS_IDLE', 0, 1, ?, NULL)", rusqlite::params![id, id, timestamp]).unwrap();
             let logs = db_home.join("brain").join(id).join(".system_generated/logs");
             std::fs::create_dir_all(&logs).unwrap();
-            std::fs::write(logs.join("transcript.jsonl"), r#"{"status":"ERROR","error":"RESOURCE_EXHAUSTED 429"}"#).unwrap();
+            std::fs::write(logs.join("transcript.jsonl"), if id == "system" { r#"{"status":"DONE","type":"SYSTEM_MESSAGE","content":"Subagent stopped: RESOURCE_EXHAUSTED (code 429)"}"# } else { r#"{"status":"ERROR","error":"RESOURCE_EXHAUSTED 429"}"# }).unwrap();
         }
         let mut child = std::process::Command::new("python3").arg("-").env("ANTIGRAVITY_HOME", &root)
             .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
@@ -1084,8 +1108,9 @@ mod tests {
         let text = String::from_utf8_lossy(&output.stdout);
         let json = text.split("__ANTIGRAVITY_PROBE_JSON_START__").nth(1).unwrap().split("__ANTIGRAVITY_PROBE_JSON_END__").next().unwrap();
         let tasks: Vec<InterruptedAntigravityTask> = serde_json::from_str(json.trim()).unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].thread_id, "current");
+        assert_eq!(tasks.len(), 2);
+        assert!(tasks.iter().any(|t| t.thread_id == "current"));
+        assert!(tasks.iter().any(|t| t.thread_id == "system"));
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

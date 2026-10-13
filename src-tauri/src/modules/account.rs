@@ -1305,6 +1305,15 @@ fn collect_group_quotas(
                     count += 1;
                 }
             }
+            // Standalone Antigravity now reports quota pools even when the old
+            // model names (notably Gemini Pro) are no longer offered.
+            let pool = if group.id == "claude_45" { "3p" } else { "gemini" };
+            let windows: Vec<i32> = quota.models.iter()
+                .filter(|m| m.name == format!("{}-5h", pool) || m.name == format!("{}-weekly", pool))
+                .map(|m| m.percentage).collect();
+            if let Some(remaining) = windows.into_iter().min() {
+                return Some(AutoSwitchGroupQuota { id: group.id.clone(), name: group.name.clone(), percentage: remaining });
+            }
             if count == 0 {
                 return None;
             }
@@ -1451,7 +1460,7 @@ fn can_be_auto_switch_candidate(
     }
     if !group_quotas
         .iter()
-        .all(|group| group.percentage >= threshold)
+        .all(|group| group.percentage > threshold)
     {
         return false;
     }
@@ -1872,6 +1881,16 @@ async fn run_auto_switch_if_needed_inner() -> Result<Option<Account>, String> {
         trigger_context.rule
     ));
 
+    // Use the same standalone desktop flow as manual switching (Keychain,
+    // restart and SSH projection), rather than the IDE-only injection path.
+    if cfg.antigravity_launch_on_switch && !cfg.antigravity_dual_switch_no_restart_enabled
+        && crate::commands::system::resolve_antigravity_installed_version_info_for_target(Some("antigravity")).is_some() {
+        if let Some(app) = crate::get_app_handle() {
+            let switched = crate::commands::account::switch_account_legacy_antigravity(app.clone(), target.id.clone()).await?;
+            modules::websocket::broadcast_data_changed("auto_switch");
+            return Ok(Some(switched));
+        }
+    }
     let switched = if cfg.antigravity_dual_switch_no_restart_enabled {
         switch_account_dual_no_restart(
             &target.id,
@@ -2669,4 +2688,21 @@ mod note_tests {
         std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR");
         let _ = fs::remove_dir_all(&data_dir);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn auto_resume_regression_pool_candidates_without_legacy_pro_models() {
+    let token = TokenData::new("test".into(), "test".into(), 3600, None, None, None);
+    let mut account = Account::new("candidate".into(), "test@example.test".into(), token);
+    let mut quota = crate::models::QuotaData::new();
+    for name in ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"] {
+        quota.models.push(crate::models::quota::ModelQuota { name: name.into(), display_name: None, percentage: 100, reset_time: String::new() });
+    }
+    account.quota = Some(quota);
+    let groups = default_auto_switch_groups();
+    assert!(can_be_auto_switch_candidate(&account, "other", 5, &groups, false, 5));
+    account.quota.as_mut().unwrap().models[0].percentage = 0;
+    assert!(!can_be_auto_switch_candidate(&account, "other", 0, &groups, false, 5));
+    assert!(evaluate_auto_switch_trigger(&account, 5, "any_group", &groups, false, 5).is_some());
 }
