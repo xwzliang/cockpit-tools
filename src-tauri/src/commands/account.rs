@@ -497,6 +497,7 @@ async fn switch_account_legacy_antigravity(
     match auth_mode {
         AntigravityDesktopAuthMode::SystemCredential => {
             modules::logger::log_info("[Antigravity] 使用系统凭据认证模式写入账号");
+            modules::antigravity_acknowledgment::prepare(&default_dir, &account.email)?;
             modules::antigravity_credential::write_antigravity_system_credential(&account)?;
         }
         AntigravityDesktopAuthMode::LegacyStateDb => {

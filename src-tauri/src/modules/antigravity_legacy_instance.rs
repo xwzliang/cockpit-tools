@@ -192,6 +192,7 @@ pub fn inject_account_to_profile(profile_dir: &Path, account_id: &str) -> Result
     let account = modules::load_account(account_id)?;
     match resolve_auth_mode() {
         AntigravityDesktopAuthMode::SystemCredential => {
+            modules::antigravity_acknowledgment::prepare(profile_dir, &account.email)?;
             modules::antigravity_credential::write_antigravity_system_credential(&account)
         }
         AntigravityDesktopAuthMode::LegacyStateDb => {

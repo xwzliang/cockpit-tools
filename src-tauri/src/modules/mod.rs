@@ -146,3 +146,5 @@ pub mod zed_oauth;
 
 // 重新导出常用函数
 pub use account::*;
+
+pub mod antigravity_acknowledgment;
