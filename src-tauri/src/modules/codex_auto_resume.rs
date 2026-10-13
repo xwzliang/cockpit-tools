@@ -19,6 +19,14 @@ fn resumed_tasks_cache() -> &'static Mutex<HashMap<String, i64>> {
     RESUMED_TASKS_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn claim_auto_resume(cache: &mut HashMap<String, i64>, task_id: &str, now_ts: i64) -> bool {
+    if cache.get(task_id).is_some_and(|last| now_ts - last < 1800) {
+        return false;
+    }
+    cache.insert(task_id.to_string(), now_ts);
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterruptedCodexTask {
     #[serde(default)]
@@ -1684,8 +1692,7 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
     if !current_can_resume {
         match check_and_auto_switch_for_earlier_reset(app).await {
             Ok(true) => {
-                logger::log_info("[CodexAutoResume] 已自动切号至优先重置的账号，中断任务将在切号后恢复");
-                return;
+                logger::log_info("[CodexAutoResume] 已自动切号至优先重置的账号，立即恢复中断任务");
             }
             Ok(false) => {}
             Err(e) => {
@@ -1694,6 +1701,15 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
         }
     }
 
+    // Re-read the active account after switching. Another account's available quota
+    // must not cause a resume while the active credentials are still limited.
+    if !get_current_codex_quota_resets_at().2 {
+        return;
+    }
+    resume_available_interrupted_tasks(app).await;
+}
+
+async fn resume_available_interrupted_tasks(app: &AppHandle) {
     let tasks = detect_all_interrupted_tasks().await;
     let now_ts = Utc::now().timestamp();
 
@@ -1705,13 +1721,7 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
         // Deduplication check: avoid triggering repeatedly within 30 minutes
         let should_trigger = {
             let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
-            match cache.get(&task.id) {
-                Some(&last_trigger) if now_ts - last_trigger < 1800 => false,
-                _ => {
-                    cache.insert(task.id.clone(), now_ts);
-                    true
-                }
-            }
+            claim_auto_resume(&mut cache, &task.id, now_ts)
         };
 
         if !should_trigger {
@@ -1734,7 +1744,7 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
                 // Send OS notification
                 let title = "Codex 任务已自动恢复";
                 let display_title = if task.title.len() > 50 {
-                    format!("{}...", &task.title[..47])
+                    format!("{}...", task.title.chars().take(47).collect::<String>())
                 } else {
                     task.title.clone()
                 };
@@ -1789,72 +1799,9 @@ pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
     }
 
     logger::log_info("[CodexAutoResume] 切号后检测到配额可用，开始检查并立即恢复勾选的中断任务...");
-    let tasks = detect_all_interrupted_tasks().await;
-    let now_ts = Utc::now().timestamp();
-
-    for task in tasks {
-        if task.is_excluded {
-            continue;
-        }
-
-        // Clear the 30-min dedup lock for this task so switch resumption fires immediately
-        {
-            let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
-            cache.insert(task.id.clone(), now_ts);
-        }
-
-        logger::log_info(&format!(
-            "[CodexAutoResume] 切号后立即恢复任务: id={}, title={}",
-            task.id, task.title
-        ));
-
-        let res = resume_task(&task, None, "auto").await;
-        match res {
-            Ok(result) => {
-                logger::log_info(&format!(
-                    "[CodexAutoResume] 切号后自动恢复成功: {} - {}",
-                    task.id, result.message
-                ));
-
-                let title = "Codex 任务已在切号后自动恢复";
-                let display_title = if task.title.len() > 50 {
-                    format!("{}...", &task.title[..47])
-                } else {
-                    task.title.clone()
-                };
-                let body = format!("账号切换后已立即恢复执行：{}", display_title);
-
-                #[cfg(target_os = "macos")]
-                {
-                    let bundle_identifier = app.config().identifier.clone();
-                    let mut notification = mac_notification_sys::Notification::new();
-                    notification.title(title).message(&body);
-                    let _ = mac_notification_sys::set_application(&bundle_identifier);
-                    let _ = notification.send();
-                }
-
-                #[cfg(not(target_os = "macos"))]
-                {
-                    use tauri_plugin_notification::NotificationExt;
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title(title)
-                        .body(&body)
-                        .show();
-                }
-
-                let _ = app.emit("codex://task-auto-resumed", &task);
-            }
-            Err(err) => {
-                logger::log_warn(&format!(
-                    "[CodexAutoResume] 切号后自动恢复任务失败: {} - {}",
-                    task.id, err
-                ));
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
+    // Share the scheduler's atomic claim and retry policy. The delayed switch
+    // callback can overlap the scheduler that initiated the account switch.
+    resume_available_interrupted_tasks(app).await;
 }
 
 static CONSUMED_EXPIRING_CREDITS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -2009,6 +1956,24 @@ pub async fn check_and_auto_apply_expiring_resets(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_resume_regression_switch_callback_and_scheduler_share_claim() {
+        let mut cache = HashMap::new();
+        assert!(claim_auto_resume(&mut cache, "task", 2000));
+        assert!(!claim_auto_resume(&mut cache, "task", 2001));
+        assert!(claim_auto_resume(&mut cache, "other", 2001));
+        assert!(claim_auto_resume(&mut cache, "task", 3800));
+    }
+
+    #[test]
+    fn auto_resume_regression_failure_retries_after_one_minute() {
+        let mut cache = HashMap::new();
+        assert!(claim_auto_resume(&mut cache, "task", 2000));
+        cache.insert("task".to_string(), 2000 - 1800 + 60);
+        assert!(!claim_auto_resume(&mut cache, "task", 2059));
+        assert!(claim_auto_resume(&mut cache, "task", 2060));
+    }
 
     #[tokio::test]
     async fn test_remote_detection_on_pve() {
