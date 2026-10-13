@@ -1471,6 +1471,21 @@ async fn resume_task_internal(
             .find(|s| s.id == server_id)
             .ok_or_else(|| format!("未找到目标 SSH 服务器: {}", server_id))?;
 
+        // Pool-wide/local quota is only valid after the remote profile uses
+        // the same credentials. Account-switch sync only covers the selected host.
+        let current = crate::modules::codex_account::get_current_account()
+            .ok_or("No active Codex account for SSH task recovery")?;
+        let synchronized = server.last_sync.as_ref().is_some_and(|status| {
+            status.verified && status.account_id == current.id
+                && status.token_generation == current.token_generation
+        });
+        if !synchronized {
+            let sync = ssh_server::sync_current_account_to_server(Some(server.id.clone())).await?;
+            if !sync.verified {
+                return Err(sync.error.unwrap_or_else(|| "Remote account synchronization failed".to_string()));
+            }
+        }
+
         let output = ssh_server::run_ssh(
             &server,
             25,
@@ -1852,6 +1867,8 @@ try:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 262144))
             lines = f.read().decode("utf-8", errors="ignore").splitlines()
+        ended = False
+        failed = False
         for line in reversed(lines):
             try: event = json.loads(line)
             except Exception: continue
@@ -1859,15 +1876,20 @@ try:
             payload = event.get("payload", {})
             if event.get("type") == "event_msg":
                 kind = payload.get("type")
-                if kind in ("task_complete", "task_completed", "turn_aborted"):
+                if kind in ("task_complete", "task_completed"):
+                    ended = True
+                    result = "finished"
+                    continue
+                if kind == "turn_aborted":
                     result = "finished"
                     break
                 if kind == "task_started":
-                    result = "running"
+                    result = "retry" if failed else ("finished" if ended else "running")
                     break
                 if kind == "error":
+                    failed = True
                     result = "retry"
-                    break
+                    continue
 except Exception: pass
 try:
     # The CLI fallback may not write thread_history while it is executing.
@@ -2354,11 +2376,18 @@ for accepted in (True, False):
             ("interrupted", (now - 100) * 1000, "task_started", "running"),
             ("inProgress", (now - 100) * 1000, "task_complete", "finished"),
             ("inProgress", (now - 100) * 1000, "error", "retry"),
+            ("completed", now * 1000, "error_then_complete", "retry"),
         ] {
             let line = if rollout_kind.is_empty() { String::new() } else {
                 serde_json::json!({"timestamp": Utc::now().to_rfc3339(),
                     "type": "event_msg", "payload": {"type": rollout_kind}}).to_string()
             };
+            let line = if rollout_kind == "error_then_complete" {
+                ["task_started", "error", "task_complete"].into_iter().map(|kind| {
+                    serde_json::json!({"timestamp": Utc::now().to_rfc3339(), "type":"event_msg",
+                        "payload":{"type":kind,"message":"usage limit"}}).to_string()
+                }).collect::<Vec<_>>().join("\n")
+            } else { line };
             std::fs::write(&rollout, line).unwrap();
             conn.execute("UPDATE thread_turns SET status = ?, started_at = ?", rusqlite::params![status, started_at]).unwrap();
             let mut child = std::process::Command::new("python3")
