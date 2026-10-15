@@ -540,14 +540,37 @@ fn build_switch_candidate(
     })
 }
 
+// Spend ample short-window quota before the weekly allowance is renewed.
+// Unknown or elapsed weekly resets do not establish an upcoming renewal.
+pub(crate) fn compare_weekly_reset_preference(
+    a: &CodexAccount,
+    b: &CodexAccount,
+    now: i64,
+) -> std::cmp::Ordering {
+    let priority = |account: &CodexAccount| {
+        let quota = account.quota.as_ref();
+        let ample = quota.is_some_and(|q| {
+            q.hourly_window_present != Some(false) && q.hourly_percentage >= 50
+        });
+        let reset = quota
+            .filter(|q| q.weekly_window_present != Some(false))
+            .and_then(|q| q.weekly_reset_time)
+            .filter(|reset| *reset > now)
+            .unwrap_or(i64::MAX);
+        (!ample, if ample { reset } else { i64::MAX })
+    };
+    priority(a).cmp(&priority(b))
+}
+
 fn pick_best_candidate(mut candidates: Vec<CodexSwitchCandidate>) -> Option<CodexAccount> {
     if candidates.is_empty() {
         return None;
     }
 
+    let now = chrono::Utc::now().timestamp();
     candidates.sort_by(|a, b| {
-        b.min_margin
-            .cmp(&a.min_margin)
+        compare_weekly_reset_preference(&a.account, &b.account, now)
+            .then_with(|| b.min_margin.cmp(&a.min_margin))
             .then_with(|| b.min_percentage.cmp(&a.min_percentage))
             .then_with(|| {
                 b.average_percentage
@@ -787,4 +810,58 @@ pub fn run_quota_alert_if_needed(
 
     crate::modules::account::dispatch_quota_alert(&payload);
     Ok(Some(payload))
+}
+
+#[cfg(test)]
+mod weekly_reset_preference_tests {
+    use super::*;
+
+    fn candidate(id: &str, hourly: i32, reset: Option<i64>) -> CodexSwitchCandidate {
+        let account = serde_json::from_value(serde_json::json!({
+            "id": id, "email": format!("{id}@example.com"),
+            "created_at": 100, "last_used": 100,
+            "tokens": {"access_token": "test", "refresh_token": "test", "id_token": "test"},
+            "quota": {"hourly_percentage": hourly, "weekly_percentage": 80,
+                "weekly_reset_time": reset}
+        })).unwrap();
+        build_switch_candidate(&account, 10, 10).unwrap()
+    }
+
+    #[test]
+    fn weekly_reset_preference_spends_soonest_renewing_ample_account() {
+        let now = chrono::Utc::now().timestamp();
+        let selected = pick_best_candidate(vec![
+            candidate("more_quota", 100, Some(now + 7200)),
+            candidate("earlier", 50, Some(now + 3600)),
+            candidate("low", 49, Some(now + 60)),
+        ]).unwrap();
+        assert_eq!(selected.id, "earlier");
+    }
+
+    #[test]
+    fn weekly_reset_preference_ignores_unknown_and_elapsed_resets() {
+        let now = chrono::Utc::now().timestamp();
+        let selected = pick_best_candidate(vec![
+            candidate("unknown", 100, None),
+            candidate("elapsed", 100, Some(now - 1)),
+            candidate("upcoming", 60, Some(now + 3600)),
+        ]).unwrap();
+        assert_eq!(selected.id, "upcoming");
+    }
+
+    #[test]
+    fn weekly_reset_preference_retains_quota_ranking_when_low_or_tied() {
+        let now = chrono::Utc::now().timestamp();
+        for reset in [None, Some(now + 3600)] {
+            let selected = pick_best_candidate(vec![
+                candidate("less", 60, reset), candidate("more", 90, reset),
+            ]).unwrap();
+            assert_eq!(selected.id, "more");
+        }
+        let selected = pick_best_candidate(vec![
+            candidate("earlier_low", 20, Some(now + 60)),
+            candidate("more_low", 40, Some(now + 3600)),
+        ]).unwrap();
+        assert_eq!(selected.id, "more_low");
+    }
 }

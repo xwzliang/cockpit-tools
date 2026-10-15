@@ -1687,10 +1687,15 @@ pub async fn check_and_auto_switch_for_earlier_reset(app: &AppHandle) -> Result<
         return Ok(false);
     }
 
-    // 排序：正额度优先 -> 重置时间最早(升序) -> 额度百分比最高(降序) -> 最久未用(升序)
+    // Prefer positive quota, then ample 5h quota with the nearest weekly renewal.
     candidates.sort_by(|a, b| {
         b.has_positive_quota
             .cmp(&a.has_positive_quota)
+            .then_with(|| {
+                crate::modules::codex_account::compare_weekly_reset_preference(
+                    &a.account, &b.account, now_ts,
+                )
+            })
             .then_with(|| a.hourly_reset_time.cmp(&b.hourly_reset_time))
             .then_with(|| b.hourly_percentage.cmp(&a.hourly_percentage))
             .then_with(|| a.last_used.cmp(&b.last_used))
