@@ -25,6 +25,8 @@ pub struct InterruptedAntigravityTask {
     #[serde(default)]
     pub server_name: Option<String>,
     pub thread_id: String, // conversation_id
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_agent_id: Option<String>,
     #[serde(default)]
     pub goal_id: Option<String>,
     #[serde(default)]
@@ -203,6 +205,40 @@ def parse_iso_time(s):
     except:
         return 0
 
+def unfinished_background_turn(steps):
+    # DONE describes one step, not the whole agent turn. Tool results and
+    # ephemeral snapshots still require a subsequent planner response.
+    pending = False
+    for step in steps:
+        kind = step.get('type')
+        if kind == 'USER_INPUT' or step.get('source') == 'USER':
+            pending = False
+        elif kind == 'PLANNER_RESPONSE':
+            if step.get('tool_calls'):
+                pending = True
+            elif str(step.get('content') or '').strip():
+                pending = False
+    return pending
+
+def restart_interrupted_background(row, parent, steps, switch_at, now):
+    updated = parse_iso_time(row.get('last_modified_time'))
+    if not switch_at or not (0 <= now - switch_at <= 7 * 86400):
+        return False
+    if not (switch_at - 120 <= updated <= switch_at + 120) or now - updated < 20:
+        return False
+    # Never revive an explicitly stopped agent or one still marked running.
+    if row.get('killed') or row.get('not_fully_idle') or row.get('status') != 'CASCADE_RUN_STATUS_IDLE':
+        return False
+    if not parent or parent.get('killed') or parent.get('not_fully_idle') or parent.get('status') != 'CASCADE_RUN_STATUS_IDLE':
+        return False
+    # A newer parent turn may have handled the failure or finished the task.
+    if parse_iso_time(parent.get('last_modified_time')) > updated:
+        return False
+    event_at = parse_iso_time(steps[-1].get('created_at')) if steps else 0
+    if not (switch_at - 120 <= event_at <= switch_at + 120):
+        return False
+    return unfinished_background_turn(steps)
+
 def check_task():
     home = os.path.expanduser(os.environ.get('ANTIGRAVITY_HOME', '~/.gemini'))
     results = []
@@ -226,28 +262,34 @@ def check_task():
             if os.path.exists(db_path + '-wal'):
                 shutil.copy2(db_path + '-wal', snapshot_path + '-wal')
             conn = sqlite3.connect(snapshot_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT conversation_id, title, preview, status, not_fully_idle, killed, last_modified_time, workspace_uris
-                FROM conversation_summaries
-                ORDER BY last_modified_time DESC
-                LIMIT 50
-            ''')
-            rows = cursor.fetchall()
+            conn.row_factory = sqlite3.Row
+            rows = [dict(r) for r in conn.execute(
+                'SELECT * FROM conversation_summaries ORDER BY last_modified_time DESC')]
+            by_id = {r['conversation_id']: r for r in rows}
+            latest_children = {}
+            for row in rows:
+                parent_id = row.get('parent_conversation_id')
+                if parent_id:
+                    latest_children.setdefault(parent_id, row['conversation_id'])
+            switch_at = int(os.environ.get('ANTIGRAVITY_SWITCH_AT', '0'))
             for r in rows:
-                cid, title, preview, c_status, not_fully_idle, killed, last_mod_str, ws_uris = r
+                cid = r['conversation_id']
+                title, preview = r.get('title'), r.get('preview')
+                c_status, not_fully_idle, killed = r.get('status'), r.get('not_fully_idle'), r.get('killed')
+                last_mod_str, ws_uris = r.get('last_modified_time'), r.get('workspace_uris')
                 # Ignore old cached transcript errors from previous installations.
                 if not cid or cid in seen_ids or parse_iso_time(last_mod_str) < int(time.time()) - 7 * 86400:
                     continue
                 
                 transcript_path = os.path.join(root_dir, 'brain', cid, '.system_generated', 'logs', 'transcript.jsonl')
                 last_step = None
+                steps = []
                 if os.path.exists(transcript_path):
                     try:
                         with open(transcript_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            lines = [l for l in f if l.strip()]
-                            if lines:
-                                last_step = json.loads(lines[-1])
+                            steps = [json.loads(l) for l in f if l.strip()]
+                            if steps:
+                                last_step = steps[-1]
                     except:
                         pass
                 
@@ -271,7 +313,20 @@ def check_task():
                     is_interrupted = True
                     error_message = 'Task was cancelled or interrupted during execution'
                 
-                if is_interrupted and is_quota_limited:
+                parent_id = r.get('parent_conversation_id')
+                parent = by_id.get(parent_id)
+                restart_interrupted = (
+                    latest_children.get(parent_id) == cid
+                    and restart_interrupted_background(r, parent, steps, switch_at, int(time.time()))
+                )
+                if restart_interrupted:
+                    error_message = 'Background agent ' + cid + ' stopped mid-turn during account restart'
+                    # Resume the owning conversation so it can inspect/recover its worker.
+                    cid = parent_id
+                    title, preview, ws_uris = parent.get('title'), parent.get('preview'), parent.get('workspace_uris')
+                if (is_interrupted and is_quota_limited) or restart_interrupted:
+                    if cid in seen_ids:
+                        continue
                     seen_ids.add(cid)
                     
                     cwd = None
@@ -289,12 +344,13 @@ def check_task():
                         'id': f'ssh:{cid}',
                         'source': 'ssh',
                         'thread_id': cid,
+                        'background_agent_id': r['conversation_id'] if restart_interrupted else None,
                         'is_goal': False,
                         'title': display_title,
                         'objective': preview,
                         'cwd': cwd,
                         'model': None,
-                        'status': 'usage_limited',
+                        'status': 'blocked' if restart_interrupted else 'usage_limited',
                         'error_message': error_message,
                         'resets_at': None,
                         'reset_window_minutes': None,
@@ -527,6 +583,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
                     server_id: None,
                     server_name: None,
                     thread_id: cid,
+                    background_agent_id: None,
                     goal_id: None,
                     is_goal: false,
                     title,
@@ -549,11 +606,19 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
 }
 
 pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedAntigravityTask>, String> {
+    let switch_at = server.last_antigravity_sync.as_ref()
+        .filter(|sync| sync.verified)
+        .map(|sync| sync.synced_at)
+        .unwrap_or(0);
+    let script = format!(
+        "import os\nos.environ['ANTIGRAVITY_SWITCH_AT'] = '{}'\n{}",
+        switch_at, PYTHON_REMOTE_PROBE,
+    );
     let output = ssh_server::run_ssh(
         server,
         15,
         &["python3", "-"],
-        Some(ssh_server::remote_python_with_home(PYTHON_REMOTE_PROBE, "ANTIGRAVITY_HOME", &server.antigravity_home)),
+        Some(ssh_server::remote_python_with_home(&script, "ANTIGRAVITY_HOME", &server.antigravity_home)),
     )
     .await?;
 
@@ -576,7 +641,7 @@ pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedAn
         task.server_id = Some(server.id.clone());
         task.server_name = Some(server.name.clone());
         task.is_excluded = excluded_ids.contains(&task.id);
-        if task.status == "usage_limited" {
+        if task.status == "usage_limited" || task.background_agent_id.is_some() {
             task.resets_at = earliest_resets_at;
             task.can_resume = current_can_resume;
         }
@@ -866,7 +931,15 @@ pub async fn resume_task(
     custom_prompt: Option<String>,
     trigger_type: &str,
 ) -> Result<ResumeTaskResult, String> {
-    let prompt = custom_prompt.unwrap_or_else(|| "Continue where you left off and finish the task.".to_string());
+    let prompt = custom_prompt.unwrap_or_else(|| {
+        if let Some(agent_id) = &task.background_agent_id {
+            format!(
+                "An account restart interrupted background agent {agent_id} mid-turn. Inspect its latest progress and current state, then resume or replace it to finish the remaining work. Preserve completed work and verify the results of prior actions before retrying them. If the task is already finished, do not repeat it."
+            )
+        } else {
+            "Continue where you left off and finish the task.".to_string()
+        }
+    });
 
     let res = if task.source == "local" {
         resume_local_task(&task.thread_id, &prompt).await
@@ -1122,6 +1195,68 @@ mod tests {
         assert_eq!(tasks.len(), 2);
         assert!(tasks.iter().any(|t| t.thread_id == "current"));
         assert!(tasks.iter().any(|t| t.thread_id == "system"));
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn auto_resume_regression_background_restart_requires_unfinished_latest_worker() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("cockpit-ag-background-{}", uuid::Uuid::new_v4()));
+        let db_home = root.join("antigravity");
+        std::fs::create_dir_all(&db_home).unwrap();
+        let db = rusqlite::Connection::open(db_home.join("conversation_summaries.db")).unwrap();
+        db.execute_batch("CREATE TABLE conversation_summaries (conversation_id TEXT,title TEXT,preview TEXT,status TEXT,not_fully_idle INTEGER,killed INTEGER,last_modified_time TEXT,workspace_uris TEXT,parent_conversation_id TEXT)").unwrap();
+        let now = Utc::now().timestamp();
+        let switch_at = now - 60;
+        let timestamp = |ts| DateTime::from_timestamp(ts, 0).unwrap().to_rfc3339();
+        for case in ["interrupted", "finished", "stopped", "running", "parent_finished", "old", "replaced", "fresh", "old_transcript"] {
+            let parent = format!("parent-{case}");
+            let child = format!("worker-{case}");
+            let child_at = match case { "old" => now - 1000, "fresh" => now - 5, _ => switch_at + 2 };
+            let parent_at = if case == "parent_finished" { child_at + 1 } else { child_at - 4 };
+            db.execute("INSERT INTO conversation_summaries VALUES (?, ?, '', 'CASCADE_RUN_STATUS_IDLE', 0, 0, ?, NULL, '')",
+                rusqlite::params![parent, format!("Review {case}"), timestamp(parent_at)]).unwrap();
+            db.execute("INSERT INTO conversation_summaries VALUES (?, '', '', ?, 0, ?, ?, NULL, ?)",
+                rusqlite::params![child, if case == "running" { "CASCADE_RUN_STATUS_RUNNING" } else { "CASCADE_RUN_STATUS_IDLE" }, i32::from(case == "stopped"), timestamp(child_at), parent]).unwrap();
+            let event_at = if case == "old_transcript" { now - 1000 } else { child_at };
+            let mut steps = vec![
+                serde_json::json!({"type":"PLANNER_RESPONSE", "status":"DONE", "created_at":timestamp(event_at - 2), "tool_calls":[{"name":"take_snapshot"}]}),
+                serde_json::json!({"type":"GENERIC", "status":"DONE", "created_at":timestamp(event_at - 1), "content":"Tool completed successfully"}),
+            ];
+            if case == "finished" {
+                steps.push(serde_json::json!({"type":"PLANNER_RESPONSE", "status":"DONE", "created_at":timestamp(event_at), "content":"All work finished"}));
+            }
+            steps.push(serde_json::json!({"type":"EPHEMERAL_MESSAGE", "status":"DONE", "created_at":timestamp(event_at)}));
+            let logs = db_home.join("brain").join(&child).join(".system_generated/logs");
+            std::fs::create_dir_all(&logs).unwrap();
+            std::fs::write(logs.join("transcript.jsonl"), steps.iter().map(|s| s.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+            if case == "replaced" {
+                db.execute("INSERT INTO conversation_summaries VALUES ('new-worker', '', '', 'CASCADE_RUN_STATUS_IDLE', 0, 0, ?, NULL, ?)",
+                    rusqlite::params![timestamp(child_at + 1), parent]).unwrap();
+            }
+        }
+        for verified_switch in [0, switch_at] {
+            let mut child = std::process::Command::new("python3").arg("-")
+                .env("ANTIGRAVITY_HOME", &root)
+                .env("ANTIGRAVITY_SWITCH_AT", verified_switch.to_string())
+                .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+            child.stdin.take().unwrap().write_all(PYTHON_REMOTE_PROBE.as_bytes()).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success());
+            let text = String::from_utf8_lossy(&output.stdout);
+            let json = text.split("__ANTIGRAVITY_PROBE_JSON_START__").nth(1).unwrap().split("__ANTIGRAVITY_PROBE_JSON_END__").next().unwrap();
+            let tasks: Vec<InterruptedAntigravityTask> = serde_json::from_str(json.trim()).unwrap();
+            if verified_switch == 0 {
+                assert!(tasks.is_empty());
+            } else {
+                assert_eq!(tasks.len(), 1, "Unexpected recoveries: {tasks:?}");
+                assert_eq!(tasks[0].thread_id, "parent-interrupted");
+                assert_eq!(tasks[0].background_agent_id.as_deref(), Some("worker-interrupted"));
+                assert_eq!(tasks[0].title, "Review interrupted");
+                assert_eq!(tasks[0].status, "blocked");
+            }
+        }
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }

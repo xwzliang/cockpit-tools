@@ -6,6 +6,7 @@ export interface InterruptedAntigravityTask {
   server_id?: string | null;
   server_name?: string | null;
   thread_id: string;
+  background_agent_id?: string | null;
   goal_id?: string | null;
   is_goal: boolean;
   title: string;
