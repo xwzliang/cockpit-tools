@@ -926,11 +926,45 @@ async fn resume_remote_task(
     if result.success { Ok(result) } else { Err(result.message) }
 }
 
+const RECOVERY_QUOTA_EXHAUSTED: &str = "Antigravity recovery quota exhausted";
+
+fn validate_fresh_recovery_quota(
+    quota: &crate::models::quota::QuotaData,
+    has_fetch_error: bool,
+) -> Result<(), String> {
+    // A passed reset time is not evidence of usable quota; only the fresh
+    // percentages can authorize a recovery launch.
+    if quota.is_forbidden || quota.models.iter().any(|model| model.percentage <= 0) {
+        return Err(RECOVERY_QUOTA_EXHAUSTED.to_string());
+    }
+    if has_fetch_error || quota.quota_summary_stale || quota.models.is_empty() {
+        return Err("Cannot confirm fresh Antigravity quota; recovery deferred".to_string());
+    }
+    Ok(())
+}
+
+async fn confirm_current_recovery_quota() -> Result<(), String> {
+    let mut account = crate::modules::account::get_current_account()?
+        .ok_or_else(|| "No current Antigravity account; recovery deferred".to_string())?;
+    let quota = crate::modules::account::fetch_quota_with_fresh_token(&mut account, true)
+        .await
+        .map_err(|error| format!("Antigravity quota refresh failed; recovery deferred: {error}"))?;
+    // Persist exhaustion as well as availability so automatic switching evaluates
+    // the response we just fetched, rather than the old cached percentages.
+    crate::modules::account::update_account_quota(&account.id, quota.clone())?;
+    if crate::modules::account::get_current_account_id()?.as_deref() != Some(account.id.as_str()) {
+        return Err("Antigravity account changed during quota refresh; recovery deferred".to_string());
+    }
+    crate::modules::websocket::broadcast_data_changed("quota_refreshed");
+    validate_fresh_recovery_quota(&quota, account.quota_error.is_some())
+}
+
 pub async fn resume_task(
     task: &InterruptedAntigravityTask,
     custom_prompt: Option<String>,
     trigger_type: &str,
 ) -> Result<ResumeTaskResult, String> {
+    confirm_current_recovery_quota().await?;
     let prompt = custom_prompt.unwrap_or_else(|| {
         if let Some(agent_id) = &task.background_agent_id {
             format!(
@@ -1009,7 +1043,7 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
     let now_ts = Utc::now().timestamp();
 
     for task in tasks {
-        if !task.can_resume || task.is_excluded {
+        if task.is_excluded {
             continue;
         }
 
@@ -1073,6 +1107,18 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
                 let _ = app.emit("antigravity://task-auto-resumed", &task);
             }
             Err(err) => {
+                if err == RECOVERY_QUOTA_EXHAUSTED {
+                    // Do not consume the recovery cooldown before switching;
+                    // the switch callback needs to recover this same task.
+                    resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner()).remove(&task.id);
+                    logger::log_info("[AntigravityAutoResume] Fresh quota is exhausted; switching account before recovery");
+                    match crate::modules::account::run_auto_switch_if_needed().await {
+                        Ok(Some(_)) => {},
+                        Ok(None) => logger::log_info("[AntigravityAutoResume] No eligible automatic switch; recovery deferred"),
+                        Err(error) => logger::log_warn(&format!("[AntigravityAutoResume] Account switch failed; recovery deferred: {error}")),
+                    }
+                    return;
+                }
                 logger::log_warn(&format!(
                     "[AntigravityAutoResume] 自动恢复任务失败: {} - {}",
                     task.id, err
@@ -1091,13 +1137,7 @@ pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
         return;
     }
 
-    let (_resets_at, can_resume) = get_current_antigravity_quota_resets_at();
-    if !can_resume {
-        logger::log_info("[AntigravityAutoResume] 切号后检查：当前账号配额仍处于受限状态，跳过立即恢复");
-        return;
-    }
-
-    logger::log_info("[AntigravityAutoResume] 切号后检测到配额可用，开始检查并立即恢复勾选的中断任务...");
+    logger::log_info("[AntigravityAutoResume] Checking interrupted tasks after account switch; each recovery requires fresh quota");
     let tasks = detect_all_interrupted_tasks().await;
     let now_ts = Utc::now().timestamp();
 
@@ -1155,10 +1195,14 @@ pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
                 let _ = app.emit("antigravity://task-auto-resumed", &task);
             }
             Err(err) => {
+                resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner()).remove(&task.id);
                 logger::log_warn(&format!(
                     "[AntigravityAutoResume] 切号后自动恢复任务失败: {} - {}",
                     task.id, err
                 ));
+                if err == RECOVERY_QUOTA_EXHAUSTED {
+                    return;
+                }
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1168,6 +1212,37 @@ pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_resume_regression_fresh_quota_rejects_exhaustion_even_after_reset() {
+        let mut quota = crate::models::quota::QuotaData::new();
+        quota.add_model("model".to_string(), None, 0, "2020-01-01T00:00:00Z".to_string());
+        assert_eq!(validate_fresh_recovery_quota(&quota, false).unwrap_err(), RECOVERY_QUOTA_EXHAUSTED);
+        quota.models[0].percentage = 80;
+        assert!(validate_fresh_recovery_quota(&quota, false).is_ok());
+        quota.is_forbidden = true;
+        assert_eq!(validate_fresh_recovery_quota(&quota, false).unwrap_err(), RECOVERY_QUOTA_EXHAUSTED);
+    }
+
+    #[test]
+    fn auto_resume_regression_fresh_quota_requires_successful_complete_response() {
+        let mut quota = crate::models::quota::QuotaData::new();
+        assert!(validate_fresh_recovery_quota(&quota, false).is_err());
+        quota.add_model("model".to_string(), None, 100, String::new());
+        assert!(validate_fresh_recovery_quota(&quota, true).is_err());
+        quota.quota_summary_stale = true;
+        assert!(validate_fresh_recovery_quota(&quota, false).is_err());
+        quota.quota_summary_stale = false;
+        assert!(validate_fresh_recovery_quota(&quota, false).is_ok());
+    }
+
+    #[test]
+    fn auto_resume_regression_fresh_quota_blocks_partially_exhausted_account() {
+        let mut quota = crate::models::quota::QuotaData::new();
+        quota.add_model("available".to_string(), None, 100, String::new());
+        quota.add_model("exhausted".to_string(), None, 0, String::new());
+        assert_eq!(validate_fresh_recovery_quota(&quota, false).unwrap_err(), RECOVERY_QUOTA_EXHAUSTED);
+    }
 
     #[test]
     fn auto_resume_regression_remote_probe_ignores_stale_quota_errors() {
