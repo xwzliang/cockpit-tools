@@ -1864,6 +1864,18 @@ async fn run_auto_switch_if_needed_inner() -> Result<Option<Account>, String> {
         return Ok(None);
     }
 
+    match modules::antigravity_auto_resume::has_running_tasks_before_switch().await {
+        Ok(false) => {},
+        Ok(true) => {
+            modules::logger::log_info("[AutoSwitch] Antigravity task or background agent is running; defer switching until it stops");
+            return Ok(None);
+        }
+        Err(error) => {
+            modules::logger::log_warn(&format!("[AutoSwitch] Cannot confirm Antigravity is idle; switch deferred: {error}"));
+            return Ok(None);
+        }
+    }
+
     let reason_snapshot = build_auto_switch_reason(&trigger_context, candidates.len());
 
     candidates.sort_by(compare_auto_switch_candidates);

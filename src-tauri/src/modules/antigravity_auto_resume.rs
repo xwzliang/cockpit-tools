@@ -193,6 +193,53 @@ pub fn clear_resumed_task_records() -> Result<(), String> {
     Ok(())
 }
 
+// Query every conversation, including untitled background agents. A parent may
+// be IDLE while not_fully_idle indicates that one of its workers is still busy.
+const PYTHON_RUNNING_PROBE: &str = r#"
+import os, sqlite3, json
+home = os.path.expanduser(os.environ.get('ANTIGRAVITY_HOME', '~/.gemini'))
+running = False
+for folder in ('antigravity', 'antigravity-cli', ''):
+    path = os.path.join(home, folder, 'conversation_summaries.db')
+    if not os.path.exists(path):
+        continue
+    from pathlib import Path
+    with sqlite3.connect(Path(path).as_uri() + '?mode=ro', uri=True) as conn:
+        running = running or conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM conversation_summaries WHERE COALESCE(killed, 0) = 0 AND (status = 'CASCADE_RUN_STATUS_RUNNING' OR COALESCE(not_fully_idle, 0) != 0))"
+        ).fetchone()[0] != 0
+print('__ANTIGRAVITY_RUNNING__' + json.dumps(bool(running)))
+"#;
+
+fn parse_running_probe(output: &str) -> Result<bool, String> {
+    output.lines().find_map(|line| line.strip_prefix("__ANTIGRAVITY_RUNNING__"))
+        .ok_or_else(|| "Antigravity activity probe returned no status".to_string())
+        .and_then(|value| serde_json::from_str(value).map_err(|e| format!("Invalid Antigravity activity status: {e}")))
+}
+
+pub async fn has_running_tasks_before_switch() -> Result<bool, String> {
+    let output = tokio::process::Command::new("python3")
+        .args(["-c", PYTHON_RUNNING_PROBE])
+        .output().await.map_err(|e| format!("Cannot check local Antigravity activity: {e}"))?;
+    if !output.status.success() {
+        return Err("Local Antigravity activity query failed; account switch deferred".to_string());
+    }
+    if parse_running_probe(&String::from_utf8_lossy(&output.stdout))? {
+        return Ok(true);
+    }
+    let servers = ssh_server::list_servers()?;
+    if let Some(server) = servers.servers.iter().find(|server|
+        Some(&server.id) == servers.selected_antigravity_server_id.as_ref()
+            && server.sync_on_antigravity_switch
+    ) {
+        let output = ssh_server::run_ssh(server, 15, &["python3", "-"], Some(
+            ssh_server::remote_python_with_home(PYTHON_RUNNING_PROBE, "ANTIGRAVITY_HOME", &server.antigravity_home)
+        )).await?;
+        return parse_running_probe(&output);
+    }
+    Ok(false)
+}
+
 const PYTHON_REMOTE_PROBE: &str = r#"
 import os, sys, glob, json, sqlite3, time, tempfile, shutil
 
@@ -1212,6 +1259,31 @@ pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_resume_regression_switch_waits_for_running_workers() {
+        let root = std::env::temp_dir().join(format!("cockpit-ag-running-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("antigravity")).unwrap();
+        let db = rusqlite::Connection::open(root.join("antigravity/conversation_summaries.db")).unwrap();
+        db.execute_batch("CREATE TABLE conversation_summaries (status TEXT, not_fully_idle INTEGER, killed INTEGER)").unwrap();
+        for (status, busy, killed, expected) in [
+            ("CASCADE_RUN_STATUS_RUNNING", 0, 0, true),
+            ("CASCADE_RUN_STATUS_IDLE", 1, 0, true),
+            ("CASCADE_RUN_STATUS_IDLE", 0, 0, false),
+            ("CASCADE_RUN_STATUS_RUNNING", 1, 1, false),
+        ] {
+            db.execute("DELETE FROM conversation_summaries", []).unwrap();
+            db.execute("INSERT INTO conversation_summaries VALUES (?, ?, ?)", rusqlite::params![status, busy, killed]).unwrap();
+            let output = std::process::Command::new("python3").args(["-c", PYTHON_RUNNING_PROBE])
+                .env("ANTIGRAVITY_HOME", &root).output().unwrap();
+            assert!(output.status.success());
+            assert_eq!(parse_running_probe(&String::from_utf8_lossy(&output.stdout)).unwrap(), expected);
+        }
+        assert!(parse_running_probe("").is_err());
+        assert!(parse_running_probe("__ANTIGRAVITY_RUNNING__invalid").is_err());
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn auto_resume_regression_fresh_quota_rejects_exhaustion_even_after_reset() {
