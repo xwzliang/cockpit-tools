@@ -1,3 +1,4 @@
+import { quotaErrorRetryDue } from '../utils/quotaErrorRetry';
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -815,6 +816,43 @@ export function useAutoRefresh() {
             } else {
               console.log(`[AutoRefresh] ${descriptor.label} 当前账号刷新已禁用${descriptor.currentMinutes === -1 ? '（账号级覆盖禁用）' : '（配额自动刷新未开启）'}`);
             }
+          }
+
+          // Retry failed reads for the whole pool, including inactive accounts.
+          // Keep explicit platform/group refresh-disable settings authoritative.
+          if (config.codex_auto_refresh_minutes > 0 || codexCustomRefreshByMinutes.size > 0) {
+            const lastErrorRetry = new Map<string, number>();
+            tasks.push({
+              key: 'retry:codex-quota-error',
+              label: 'Codex failed quota refresh retry',
+              intervalMs: 30_000,
+              shouldSkip: () => codexRefreshingRef.current || codexCurrentRefreshingRef.current,
+              run: () => executeWithGuard(codexRefreshingRef, async () => {
+                const now = Date.now();
+                const accounts = useCodexAccountStore.getState().accounts;
+                const customIds = new Set([...codexCustomRefreshByMinutes.values()].flat());
+                const ids = accounts.filter((account) =>
+                  (!isCodexApiKeyAccount(account) || isCodexNewApiAccount(account)) &&
+                  (config.codex_auto_refresh_minutes > 0 || customIds.has(account.id)) &&
+                  quotaErrorRetryDue(account.quota_error?.timestamp, lastErrorRetry.get(account.id), now)
+                ).map((account) => account.id);
+                const failedIds = new Set(accounts.filter((account) => account.quota_error).map((account) => account.id));
+                for (const id of lastErrorRetry.keys()) {
+                  if (!failedIds.has(id)) lastErrorRetry.delete(id);
+                }
+                if (ids.length === 0) return;
+                for (const id of ids) lastErrorRetry.set(id, now);
+                try {
+                  await codexService.refreshCodexQuotasBatch(ids, {
+                    respectGroupQuotaRefresh: true,
+                    background: true,
+                  });
+                } finally {
+                  await fetchCodexAccounts();
+                  await fetchCurrentCodexAccount();
+                }
+              }, null, '[AutoRefresh] Codex quota retry failed:'),
+            });
           }
 
           // Codex 分组自定义间隔：独立调度（最高优先级，不依赖平台间隔是否开启）
