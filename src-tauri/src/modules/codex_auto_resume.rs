@@ -1845,7 +1845,7 @@ args = json.loads(base64.b64decode(sys.argv[1]))
 home = Path(os.environ.get("CODEX_HOME") or str(Path.home() / ".codex"))
 thread = args["thread_id"]
 since = args["since"]
-result = "retry"
+result = "unknown"
 def timestamp(value):
     try:
         n = float(value)
@@ -1858,7 +1858,8 @@ try:
     row = db.execute("SELECT status, started_at FROM thread_turns WHERE thread_id = ? ORDER BY started_at DESC LIMIT 1", (thread,)).fetchone()
     db.close()
     if row:
-        if row[0] == "inProgress": result = "running"
+        if row[0] in ("inProgress", "in_progress", "running"): result = "running"
+        elif row[0] in ("failed", "interrupted"): result = "retry"
         elif since and timestamp(row[1]) >= since and row[0] in ("completed", "cancelled", "canceled"):
             result = "finished"
 except Exception: pass
@@ -1867,35 +1868,49 @@ try:
     row = db.execute("SELECT archived, rollout_path FROM threads WHERE id = ?", (thread,)).fetchone()
     db.close()
     if row and row[0]: result = "finished"
-    elif row and row[1] and since:
+    elif row and row[1]:
         with open(row[1], "rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 262144))
             lines = f.read().decode("utf-8", errors="ignore").splitlines()
+        # Long command output may push task_started outside this tail. Without
+        # a terminal event, an existing transcript is not proof of interruption.
+        if any(line.strip() for line in lines):
+            result = "running"
         ended = False
         failed = False
+        newer_activity = False
         for line in reversed(lines):
             try: event = json.loads(line)
             except Exception: continue
-            if timestamp(event.get("timestamp")) < since: break
+            if since and timestamp(event.get("timestamp")) < since: break
             payload = event.get("payload", {})
+            if event.get("type") == "response_item" and not ended:
+                newer_activity = True
             if event.get("type") == "event_msg":
                 kind = payload.get("type")
+                if kind in ("agent_reasoning", "agent_message", "exec_command_begin", "exec_command_end") and not ended:
+                    newer_activity = True
                 if kind in ("task_complete", "task_completed"):
+                    if newer_activity:
+                        break
+                    failed = failed or bool(payload.get("error"))
                     ended = True
-                    result = "finished"
+                    result = "retry" if failed else "finished"
                     continue
                 if kind == "turn_aborted":
                     result = "finished"
                     break
                 if kind == "task_started":
-                    result = "retry" if failed else ("finished" if ended else "running")
+                    result = ("retry" if failed else "finished") if ended else "running"
                     break
                 if kind == "error":
                     failed = True
-                    result = "retry"
+                    if ended:
+                        result = "retry"
                     continue
-except Exception: pass
+except Exception:
+    if result != "running": result = "unknown"
 try:
     # The CLI fallback may not write thread_history while it is executing.
     processes = subprocess.run(["ps", "-axo", "command="], capture_output=True, text=True, timeout=5).stdout
@@ -1920,7 +1935,11 @@ async fn recovery_progress(retry: &RecoveryRetry) -> RecoveryProgress {
                 use std::io::Write;
                 stdin.write_all(script.as_bytes()).map_err(|err| err.to_string())?;
             }
-            child.wait_with_output().map(|out| String::from_utf8_lossy(&out.stdout).to_string()).map_err(|err| err.to_string())
+            let output = child.wait_with_output().map_err(|err| err.to_string())?;
+            if !output.status.success() {
+                return Err("Recovery activity probe failed".to_string());
+            }
+            Ok(String::from_utf8_lossy(&output.stdout).to_string())
         }).await.unwrap_or_else(|err| Err(err.to_string()))
     } else {
         let server = ssh_server::list_servers().ok().and_then(|list| list.servers.into_iter()
@@ -1933,7 +1952,9 @@ async fn recovery_progress(retry: &RecoveryRetry) -> RecoveryProgress {
     match output {
         Ok(text) if text.contains("__RECOVERY_PROGRESS__running") => RecoveryProgress::Running,
         Ok(text) if text.contains("__RECOVERY_PROGRESS__finished") => RecoveryProgress::Finished,
-        _ => RecoveryProgress::Retry,
+        Ok(text) if text.contains("__RECOVERY_PROGRESS__retry") => RecoveryProgress::Retry,
+        // An unavailable probe is not proof that a task stopped.
+        _ => RecoveryProgress::Running,
     }
 }
 
@@ -2366,45 +2387,51 @@ for accepted in (True, False):
         conn.execute_batch("CREATE TABLE thread_turns (thread_id TEXT, status TEXT, started_at INTEGER);").unwrap();
         let now = Utc::now().timestamp();
         conn.execute("INSERT INTO thread_turns VALUES (?, 'completed', ?)", rusqlite::params![thread_id, (now - 100) * 1000]).unwrap();
-        let encoded = BASE64_STANDARD.encode(serde_json::json!({"thread_id": thread_id, "since": now}).to_string());
         let state = rusqlite::Connection::open(dir.join("state_5.sqlite")).unwrap();
         state.execute_batch("CREATE TABLE threads (id TEXT, archived INTEGER, rollout_path TEXT);").unwrap();
         let rollout = dir.join("rollout.jsonl");
         state.execute("INSERT INTO threads VALUES (?, 0, ?)", rusqlite::params![thread_id, rollout.to_str().unwrap()]).unwrap();
-        for (status, started_at, rollout_kind, expected) in [
-            ("completed", (now - 100) * 1000, "", "retry"),
-            ("inProgress", now * 1000, "", "running"),
-            ("failed", now * 1000, "", "retry"),
-            ("completed", now * 1000, "", "finished"),
-            ("cancelled", now * 1000, "", "finished"),
-            // New desktop versions no longer update the older history database.
-            ("interrupted", (now - 100) * 1000, "task_started", "running"),
-            ("inProgress", (now - 100) * 1000, "task_complete", "finished"),
-            ("inProgress", (now - 100) * 1000, "error", "retry"),
-            ("completed", now * 1000, "error_then_complete", "retry"),
-        ] {
-            let line = if rollout_kind.is_empty() { String::new() } else {
-                serde_json::json!({"timestamp": Utc::now().to_rfc3339(),
-                    "type": "event_msg", "payload": {"type": rollout_kind}}).to_string()
-            };
-            let line = if rollout_kind == "error_then_complete" {
-                ["task_started", "error", "task_complete"].into_iter().map(|kind| {
-                    serde_json::json!({"timestamp": Utc::now().to_rfc3339(), "type":"event_msg",
-                        "payload":{"type":kind,"message":"usage limit"}}).to_string()
-                }).collect::<Vec<_>>().join("\n")
-            } else { line };
-            std::fs::write(&rollout, line).unwrap();
-            conn.execute("UPDATE thread_turns SET status = ?, started_at = ?", rusqlite::params![status, started_at]).unwrap();
-            let mut child = std::process::Command::new("python3")
-                .args(["-", &encoded]).env("CODEX_HOME", &dir)
-                .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
-            {
-                use std::io::Write;
-                child.stdin.take().unwrap().write_all(PYTHON_RECOVERY_PROGRESS.as_bytes()).unwrap();
+        for since in [0, now] {
+            let encoded = BASE64_STANDARD.encode(serde_json::json!({"thread_id": thread_id, "since": since}).to_string());
+            for (status, started_at, rollout_kind, expected) in [
+                ("completed", (now - 100) * 1000, "", "unknown"),
+                ("inProgress", now * 1000, "", "running"),
+                ("failed", now * 1000, "", "retry"),
+                ("completed", now * 1000, "", if since == 0 { "unknown" } else { "finished" }),
+                ("cancelled", now * 1000, "", if since == 0 { "unknown" } else { "finished" }),
+                // New desktop versions no longer update the older history database.
+                ("interrupted", (now - 100) * 1000, "task_started", "running"),
+                ("interrupted", (now - 100) * 1000, "agent_reasoning", "running"),
+                ("interrupted", (now - 100) * 1000, "exec_command_begin", "running"),
+                ("inProgress", (now - 100) * 1000, "task_complete", "finished"),
+                ("inProgress", (now - 100) * 1000, "error", "running"),
+                ("completed", now * 1000, "error_then_complete", "retry"),
+                ("interrupted", (now - 100) * 1000, "error_while_running", "running"),
+            ] {
+                let line = if rollout_kind.is_empty() { String::new() } else {
+                    serde_json::json!({"timestamp": Utc::now().to_rfc3339(),
+                        "type": "event_msg", "payload": {"type": rollout_kind}}).to_string()
+                };
+                let line = if matches!(rollout_kind, "error_then_complete" | "error_while_running") {
+                    let final_kind = if rollout_kind == "error_then_complete" { "task_complete" } else { "agent_reasoning" };
+                    ["task_started", "error", final_kind].into_iter().map(|kind| {
+                        serde_json::json!({"timestamp": Utc::now().to_rfc3339(), "type":"event_msg",
+                            "payload":{"type":kind,"message":"usage limit"}}).to_string()
+                    }).collect::<Vec<_>>().join("\n")
+                } else { line };
+                std::fs::write(&rollout, line).unwrap();
+                conn.execute("UPDATE thread_turns SET status = ?, started_at = ?", rusqlite::params![status, started_at]).unwrap();
+                let mut child = std::process::Command::new("python3")
+                    .args(["-", &encoded]).env("CODEX_HOME", &dir)
+                    .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+                {
+                    use std::io::Write;
+                    child.stdin.take().unwrap().write_all(PYTHON_RECOVERY_PROGRESS.as_bytes()).unwrap();
+                }
+                let output = child.wait_with_output().unwrap();
+                assert!(output.status.success());
+                assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), format!("__RECOVERY_PROGRESS__{}", expected));
             }
-            let output = child.wait_with_output().unwrap();
-            assert!(output.status.success());
-            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), format!("__RECOVERY_PROGRESS__{}", expected));
         }
         drop(conn);
         drop(state);
