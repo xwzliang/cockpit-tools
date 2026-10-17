@@ -73,6 +73,8 @@ pub struct InterruptedCodexTask {
     pub server_name: Option<String>,
     pub thread_id: String,
     #[serde(default)]
+    pub restart_interrupted_at: Option<i64>,
+    #[serde(default)]
     pub goal_id: Option<String>,
     #[serde(default)]
     pub is_goal: bool,
@@ -351,6 +353,36 @@ def is_thread_in_progress(hist_db, thread_id):
     except Exception:
         return False
 
+def restart_interruption(hist_db, thread_id, rollout_path):
+    # Only a verified projection/restart can explain a non-quota interruption.
+    switch_at = int(os.environ.get('COCKPIT_CODEX_SWITCH_AT', '0'))
+    if not switch_at or not (0 <= time.time() - switch_at <= 7 * 86400):
+        return None
+    try:
+        with sqlite3.connect(hist_db.as_uri() + '?mode=ro', uri=True) as db:
+            row = db.execute('SELECT status FROM thread_turns WHERE thread_id=? ORDER BY started_at DESC LIMIT 1', (thread_id,)).fetchone()
+        if not row or row[0] != 'interrupted':
+            return None
+        from datetime import datetime
+        with open(rollout_path, 'rb') as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 262144))
+            lines = stream.read().decode('utf-8', errors='replace').splitlines()
+        for line in reversed(lines):
+            try: event = json.loads(line)
+            except ValueError: continue
+            payload = event.get('payload', {})
+            kind = payload.get('type')
+            if event.get('type') != 'event_msg': continue
+            if kind in ('task_started', 'task_complete', 'task_completed'): return None
+            if kind == 'turn_aborted':
+                if payload.get('reason') in ('user', 'user_requested', 'user_cancelled'): return None
+                at = int(datetime.fromisoformat(event['timestamp'].replace('Z', '+00:00')).timestamp())
+                return at if switch_at - 30 <= at <= switch_at + 120 else None
+    except Exception:
+        pass
+    return None
+
 def detect_interrupted_tasks():
     codex_home_env = os.environ.get("CODEX_HOME")
     codex_home = Path(codex_home_env) if codex_home_env else (Path.home() / ".codex")
@@ -373,8 +405,6 @@ def detect_interrupted_tasks():
             cur_g.execute("SELECT thread_id, goal_id, objective, status, updated_at_ms FROM thread_goals WHERE status IN ('usage_limited', 'blocked')")
             for row in cur_g.fetchall():
                 thread_id, goal_id, objective, g_status, updated_at_ms = row
-                seen_threads.add(thread_id)
-                
                 if is_thread_in_progress(hist_db, thread_id):
                     continue
                 
@@ -390,6 +420,7 @@ def detect_interrupted_tasks():
                 if not (g_status == "usage_limited" or is_limited):
                     continue
                 
+                seen_threads.add(thread_id)
                 tasks.append({
                     "id": f"ssh:{thread_id}",
                     "source": "ssh",
@@ -434,12 +465,14 @@ def detect_interrupted_tasks():
                 if is_thread_in_progress(hist_db, t_id):
                     continue
                 resets_at, reset_window_minutes, error_msg, is_limited = parse_rollout_tail(rollout_path)
-                if is_limited:
+                restart_at = restart_interruption(hist_db, t_id, rollout_path)
+                if is_limited or restart_at:
                     can_resume = (resets_at is not None) and (now_ts >= resets_at)
                     tasks.append({
                         "id": f"ssh:{t_id}",
                         "source": "ssh",
                         "thread_id": t_id,
+                        "restart_interrupted_at": restart_at,
                         "goal_id": None,
                         "is_goal": False,
                         "title": title or "Untitled Task",
@@ -1157,6 +1190,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                             server_id: None,
                             server_name: None,
                             thread_id,
+                            restart_interrupted_at: None,
                             goal_id: Some(goal_id),
                             is_goal: true,
                             title,
@@ -1224,6 +1258,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                                 server_id: None,
                                 server_name: None,
                                 thread_id: t_id,
+                                restart_interrupted_at: None,
                                 goal_id: None,
                                 is_goal: false,
                                 title,
@@ -1250,11 +1285,14 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
 }
 
 pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedCodexTask>, String> {
+    let switch_at = server.last_sync.as_ref().filter(|sync| sync.verified)
+        .map(|sync| sync.synced_at).unwrap_or(0);
+    let probe = format!("import os\nos.environ['COCKPIT_CODEX_SWITCH_AT'] = '{}'\n{}", switch_at, PYTHON_REMOTE_PROBE);
     let output = ssh_server::run_ssh(
         server,
         25,
         &["python3", "-"],
-        Some(ssh_server::remote_python_with_home(PYTHON_REMOTE_PROBE, "CODEX_HOME", &server.codex_home)),
+        Some(ssh_server::remote_python_with_home(&probe, "CODEX_HOME", &server.codex_home)),
     )
     .await?;
 
@@ -1930,7 +1968,8 @@ try:
                     result = "retry" if failed else "finished"
                     continue
                 if kind == "turn_aborted":
-                    result = "finished"
+                    restart_at = args.get("restart_interrupted_at")
+                    result = "retry" if not since and restart_at and int(timestamp(event.get("timestamp"))) == restart_at else "finished"
                     break
                 if kind == "task_started":
                     result = ("retry" if failed else "finished") if ended else "running"
@@ -1955,6 +1994,7 @@ async fn recovery_progress(retry: &RecoveryRetry) -> RecoveryProgress {
     let encoded = BASE64_STANDARD.encode(serde_json::json!({
         "thread_id": retry.task.thread_id,
         "since": retry.first_attempt_at,
+        "restart_interrupted_at": retry.task.restart_interrupted_at,
     }).to_string());
     let output = if retry.task.source == "local" {
         let script = PYTHON_RECOVERY_PROGRESS.to_string();
