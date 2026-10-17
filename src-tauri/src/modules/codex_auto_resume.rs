@@ -239,6 +239,32 @@ pub fn delete_interrupted_task(task_id: &str) -> Result<(), String> {
     save_dismissed_task_ids(&ids)
 }
 
+const PYTHON_ACTIVITY_PROBE: &str = include_str!("codex_activity_probe.py");
+
+/// Refuse automatic restarts while any affected host still has an active turn.
+/// Errors are propagated so an unavailable host cannot be mistaken for idle.
+pub async fn has_running_tasks_before_switch() -> Result<bool, String> {
+    fn parse(text: &str) -> Result<bool, String> {
+        text.lines().find_map(|line| line.strip_prefix("__CODEX_RUNNING__"))
+            .ok_or_else(|| "Missing Codex activity result".to_string())
+            .and_then(|value| serde_json::from_str(value).map_err(|e| e.to_string()))
+    }
+    let output = tokio::process::Command::new("python3")
+        .args(["-c", PYTHON_ACTIVITY_PROBE]).output().await.map_err(|e| e.to_string())?;
+    if !output.status.success() { return Err("Local Codex activity query failed".to_string()); }
+    if parse(&String::from_utf8_lossy(&output.stdout))? { return Ok(true); }
+    let list = ssh_server::list_servers()?;
+    if let Some(server) = list.servers.iter().find(|server|
+        Some(&server.id) == list.selected_server_id.as_ref() && server.sync_on_codex_switch
+    ) {
+        let output = ssh_server::run_ssh(server, 25, &["python3", "-"], Some(
+            ssh_server::remote_python_with_home(PYTHON_ACTIVITY_PROBE, "CODEX_HOME", &server.codex_home)
+        )).await?;
+        return parse(&output);
+    }
+    Ok(false)
+}
+
 const PYTHON_REMOTE_PROBE: &str = r#"
 import os, sys, json, sqlite3, time
 from pathlib import Path
@@ -1727,6 +1753,11 @@ pub async fn check_and_auto_switch_for_earlier_reset(app: &AppHandle) -> Result<
 
         if !is_ready {
             continue;
+        }
+
+        if has_running_tasks_before_switch().await? {
+            logger::log_info("[CodexAutoResume] Active turn detected; defer automatic account switch");
+            return Ok(false);
         }
 
         logger::log_info(&format!(

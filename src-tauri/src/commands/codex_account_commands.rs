@@ -1492,6 +1492,14 @@ async fn run_codex_post_refresh_checks(app: &AppHandle) {
 
     match codex_account::pick_auto_switch_target_if_needed() {
         Ok(Some(target)) => {
+            match crate::modules::codex_auto_resume::has_running_tasks_before_switch().await {
+                Ok(false) => {},
+                status => {
+                    logger::log_info(&format!("[AutoSwitch][Codex] Active or unknown task activity; switch deferred: {status:?}"));
+                    CODEX_POST_REFRESH_CHECK_IN_PROGRESS.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
             let target_id = target.id.clone();
             // Keep the large switch state machine out of the post-refresh Future.
             match Box::pin(switch_codex_account(
