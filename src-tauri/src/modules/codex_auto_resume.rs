@@ -247,6 +247,9 @@ const PYTHON_ACTIVITY_PROBE: &str = include_str!("codex_activity_probe.py");
 /// Errors are propagated so an unavailable host cannot be mistaken for idle.
 pub async fn has_running_tasks_before_switch() -> Result<bool, String> {
     fn parse(text: &str) -> Result<bool, String> {
+        for thread in text.lines().filter_map(|line| line.strip_prefix("__CODEX_ACTIVE_THREAD__")) {
+            logger::log_info(&format!("[AutoSwitch][Codex] Switch deferred by active thread: {thread}"));
+        }
         text.lines().find_map(|line| line.strip_prefix("__CODEX_RUNNING__"))
             .ok_or_else(|| "Missing Codex activity result".to_string())
             .and_then(|value| serde_json::from_str(value).map_err(|e| e.to_string()))

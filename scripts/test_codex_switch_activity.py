@@ -28,7 +28,9 @@ with tempfile.TemporaryDirectory() as folder:
     def events(kinds, at=now, reason=None):
         rollout.write_text('\n'.join(json.dumps({'type':'event_msg','timestamp':datetime.fromtimestamp(at, timezone.utc).isoformat(), 'payload':{'type':kind, 'reason':reason}}) for kind in kinds))
     def activity():
-        return subprocess.check_output(['python3', str(root / 'src-tauri/src/modules/codex_activity_probe.py')], env=env, text=True).strip()
+        # Use a deterministic process lifetime, independent of the test runner.
+        wrapper = "import runpy; from unittest.mock import patch; " + "\nwith patch('subprocess.check_output', return_value='01:00 codex\\n'):\n runpy.run_path(" + repr(str(root / 'src-tauri/src/modules/codex_activity_probe.py')) + ")"
+        return subprocess.check_output(['python3', '-c', wrapper], env=env, text=True).strip().splitlines()[-1]
     for kinds, active in [(['task_started','exec_command_begin'],True),(['task_started','agent_reasoning'],True),(['task_started','error'],True),(['task_started','task_complete'],False),(['task_started','turn_aborted'],False)]:
         events(kinds)
         assert activity() == '__CODEX_RUNNING__' + json.dumps(active)
@@ -40,6 +42,11 @@ with tempfile.TemporaryDirectory() as folder:
     history.commit()
     assert activity() == '__CODEX_RUNNING__true'
     history.execute("UPDATE thread_turns SET status='interrupted'")
+    history.commit()
+    history.execute("UPDATE thread_turns SET status='inProgress', started_at=1")
+    history.commit()
+    assert activity() == '__CODEX_RUNNING__false'
+    history.execute("UPDATE thread_turns SET status='interrupted', started_at=?", (now,))
     history.commit()
     state.execute("INSERT INTO threads VALUES ('missing',?,0,'/tmp','old','model',?,NULL,NULL)", (str(home / 'deleted.jsonl'), now))
     state.commit()
