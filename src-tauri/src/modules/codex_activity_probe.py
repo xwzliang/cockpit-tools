@@ -42,7 +42,7 @@ if (home / 'state_5.sqlite').exists():
                         if kind in ('agent_reasoning', 'agent_message', 'exec_command_begin', 'exec_command_end'):
                             active = True
                             break
-                    elif event.get('type') == 'response_item':
+                    elif event.get('type') == 'response_item' and payload.get('type') != 'compaction':
                         active = True
                         break
             if active:

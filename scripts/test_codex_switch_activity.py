@@ -47,6 +47,24 @@ with tempfile.TemporaryDirectory() as folder:
     assert activity() == '__CODEX_RUNNING__true'
     events(['task_started', 'task_complete'])
     assert activity() == '__CODEX_RUNNING__false'
+    # Hydrated/forked chats may contain only a compaction snapshot, with no turn.
+    snapshot = json.dumps({'type':'response_item', 'payload':{'type':'compaction'}})
+    rollout.write_text(snapshot)
+    assert activity() == '__CODEX_RUNNING__false'
+    events(['task_started'])
+    with rollout.open('a') as stream:
+        stream.write('\n' + snapshot)
+    assert activity() == '__CODEX_RUNNING__true'
+    events(['task_started', 'task_complete'])
+    with rollout.open('a') as stream:
+        stream.write('\n' + snapshot)
+    assert activity() == '__CODEX_RUNNING__false'
+    rollout.write_text(snapshot)
+    history.execute("UPDATE thread_turns SET status='inProgress'")
+    history.commit()
+    assert activity() == '__CODEX_RUNNING__true'
+    history.execute("UPDATE thread_turns SET status='interrupted'")
+    history.commit()
     def detected():
         output = subprocess.check_output(['python3','-c',probe],env=env,text=True)
         return json.loads(output.split('__CODEX_AUTO_RESUME_JSON_START__')[1].split('__CODEX_AUTO_RESUME_JSON_END__')[0])
