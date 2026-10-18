@@ -32,6 +32,21 @@ with tempfile.TemporaryDirectory() as folder:
     for kinds, active in [(['task_started','exec_command_begin'],True),(['task_started','agent_reasoning'],True),(['task_started','error'],True),(['task_started','task_complete'],False),(['task_started','turn_aborted'],False)]:
         events(kinds)
         assert activity() == '__CODEX_RUNNING__' + json.dumps(active)
+    # A deleted historical rollout must not break the entire host probe, and
+    # must not hide an active turn recorded in history or another rollout.
+    rollout.unlink()
+    assert activity() == '__CODEX_RUNNING__false'
+    history.execute("UPDATE thread_turns SET status='inProgress'")
+    history.commit()
+    assert activity() == '__CODEX_RUNNING__true'
+    history.execute("UPDATE thread_turns SET status='interrupted'")
+    history.commit()
+    state.execute("INSERT INTO threads VALUES ('missing',?,0,'/tmp','old','model',?,NULL,NULL)", (str(home / 'deleted.jsonl'), now))
+    state.commit()
+    events(['task_started', 'exec_command_begin'])
+    assert activity() == '__CODEX_RUNNING__true'
+    events(['task_started', 'task_complete'])
+    assert activity() == '__CODEX_RUNNING__false'
     def detected():
         output = subprocess.check_output(['python3','-c',probe],env=env,text=True)
         return json.loads(output.split('__CODEX_AUTO_RESUME_JSON_START__')[1].split('__CODEX_AUTO_RESUME_JSON_END__')[0])

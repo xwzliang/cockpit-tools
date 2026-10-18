@@ -253,7 +253,7 @@ pub async fn has_running_tasks_before_switch() -> Result<bool, String> {
     }
     let output = tokio::process::Command::new("python3")
         .args(["-c", PYTHON_ACTIVITY_PROBE]).output().await.map_err(|e| e.to_string())?;
-    if !output.status.success() { return Err("Local Codex activity query failed".to_string()); }
+    if !output.status.success() { return Err(format!("Local Codex activity query failed: {}", String::from_utf8_lossy(&output.stderr).trim())); }
     if parse(&String::from_utf8_lossy(&output.stdout))? { return Ok(true); }
     let list = ssh_server::list_servers()?;
     if let Some(server) = list.servers.iter().find(|server|

@@ -16,10 +16,15 @@ if (home / 'state_5.sqlite').exists():
         for tid, path in db.execute('SELECT id, rollout_path FROM threads WHERE archived = 0'):
             active = history.get(tid) in ('inProgress', 'in_progress', 'running')
             if path:
-                with open(path, 'rb') as stream:
-                    stream.seek(0, 2)
-                    stream.seek(max(0, stream.tell() - 262144))
-                    lines = stream.read().decode('utf-8', errors='replace').splitlines()
+                try:
+                    with open(path, 'rb') as stream:
+                        stream.seek(0, 2)
+                        stream.seek(max(0, stream.tell() - 262144))
+                        lines = stream.read().decode('utf-8', errors='replace').splitlines()
+                except FileNotFoundError:
+                    # Thread rows can outlive deleted rollouts. Preserve active
+                    # history, without blocking switches on old missing logs.
+                    lines = []
                 for line in reversed(lines):
                     try:
                         event = json.loads(line)
