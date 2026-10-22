@@ -631,6 +631,7 @@ export function CodexTaskQueueSection({
                               )}
                             </span>
 
+                            {task.queue_start_at && <span className="meta-chip">{t('codexQueue.queueStartAt', '开始排队时间')}: {new Date(task.queue_start_at * 1000).toLocaleString()}</span>}
                             {/* Project cwd */}
                             <span className="meta-chip cwd" title={task.cwd}>
                               <Folder className="chip-icon" />

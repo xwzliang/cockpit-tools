@@ -10,6 +10,7 @@ export interface CodexQueuedTask {
   id: string;
   title: string;
   prompt: string;
+  queue_start_at?: number;
   source: 'local' | 'ssh';
   server_id?: string;
   server_name?: string;
@@ -57,6 +58,7 @@ export interface CodexThreadSummary {
 export interface CreateQueuedTaskRequest {
   title?: string;
   prompt: string;
+  queue_start_at?: number;
   source: 'local' | 'ssh';
   server_id?: string;
   server_name?: string;

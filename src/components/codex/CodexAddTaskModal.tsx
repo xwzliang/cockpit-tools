@@ -67,6 +67,7 @@ export function CodexAddTaskModal({
   const [threadMode, setThreadMode] = useState<'new' | 'existing'>(defaultThreadId ? 'existing' : 'new');
   const [selectedThreadId, setSelectedThreadId] = useState<string>(defaultThreadId || '');
 
+  const [queueStartAt, setQueueStartAt] = useState('');
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState('');
@@ -235,6 +236,7 @@ export function CodexAddTaskModal({
         model.trim() || (threadMode === 'existing' ? matchingThread?.model : undefined);
 
       const req: CreateQueuedTaskRequest = {
+        queue_start_at: queueStartAt ? Math.floor(new Date(queueStartAt).getTime() / 1000) : undefined,
         title: title.trim() || undefined,
         prompt: prompt.trim(),
         source,
@@ -290,6 +292,10 @@ export function CodexAddTaskModal({
           )}
 
           {/* 1. Target Environment */}
+          <div className="form-group">
+            <label>{t('codexQueue.queueStartAt', '开始排队时间（可选，留空为现在）')}</label>
+            <input type="datetime-local" className="form-input" value={queueStartAt} onChange={(e) => setQueueStartAt(e.target.value)} />
+          </div>
           <div className="form-group">
             <label className="form-label">
               {t('codexQueue.executionTarget', '执行环境')}

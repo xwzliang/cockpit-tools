@@ -41,6 +41,8 @@ pub struct CodexQueuedTask {
     pub id: String,
     pub title: String,
     pub prompt: String,
+    #[serde(default)]
+    pub queue_start_at: Option<i64>,
     pub source: String, // "local" | "ssh"
     #[serde(default)]
     pub server_id: Option<String>,
@@ -114,6 +116,8 @@ pub struct CodexQueueState {
 pub struct CreateQueuedTaskRequest {
     pub title: Option<String>,
     pub prompt: String,
+    #[serde(default)]
+    pub queue_start_at: Option<i64>,
     pub source: String, // "local" | "ssh"
     pub server_id: Option<String>,
     pub server_name: Option<String>,
@@ -311,6 +315,7 @@ pub fn add_task(req: CreateQueuedTaskRequest) -> Result<CodexQueuedTask, String>
         assigned_thread_id: None,
         pid: None,
         created_at: now,
+        queue_start_at: req.queue_start_at,
         started_at: None,
         completed_at: None,
     };
@@ -1199,6 +1204,10 @@ fn find_latest_created_thread(cwd: &str) -> Option<String> {
     None
 }
 
+fn queue_time_reached(at: Option<i64>, now: i64) -> bool {
+    at.map_or(true, |at| at <= now)
+}
+
 async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
     if (task.model.is_none() || task.model.as_ref().map(|m| m.trim().is_empty()).unwrap_or(false))
         && task.source == "local"
@@ -1609,6 +1618,7 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
             break;
         }
 
+        if !queue_time_reached(tasks[idx].queue_start_at, Utc::now().timestamp()) { continue; }
         let task_status = tasks[idx].status.clone();
         if task_status != TaskStatus::Pending && task_status != TaskStatus::WaitingInterrupted {
             continue;
@@ -1805,6 +1815,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_queue_admission_time() {
+        assert!(queue_time_reached(None, 100));
+        assert!(!queue_time_reached(Some(101), 100));
+        assert!(queue_time_reached(Some(100), 100));
+        assert!(queue_time_reached(Some(99), 100));
+    }
+
+    #[test]
     fn test_task_status_as_str() {
         assert_eq!(TaskStatus::Pending.as_str(), "pending");
         assert_eq!(TaskStatus::WaitingInterrupted.as_str(), "waiting_interrupted");
@@ -1825,6 +1843,7 @@ mod tests {
     #[test]
     fn test_add_and_reorder_tasks() {
         let req1 = CreateQueuedTaskRequest {
+            queue_start_at: None,
             title: Some("Task 1".to_string()),
             prompt: "Prompt 1".to_string(),
             source: "local".to_string(),
@@ -1836,6 +1855,7 @@ mod tests {
             model: None,
         };
         let req2 = CreateQueuedTaskRequest {
+            queue_start_at: None,
             title: Some("Task 2".to_string()),
             prompt: "Prompt 2".to_string(),
             source: "local".to_string(),
@@ -1871,6 +1891,7 @@ mod tests {
     #[test]
     fn test_retry_and_clear_completed() {
         let req = CreateQueuedTaskRequest {
+            queue_start_at: None,
             title: Some("Task to fail".to_string()),
             prompt: "Prompt".to_string(),
             source: "local".to_string(),
