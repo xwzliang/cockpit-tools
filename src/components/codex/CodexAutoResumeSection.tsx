@@ -462,10 +462,15 @@ export function CodexAutoResumeSection({
       {/* Settings bar for quick inline management */}
       {!effectiveCollapsed && (
         <div className="codex-auto-resume-settings-bar">
-          <label className="codex-auto-resume-setting-item">
-            <input type="checkbox" checked={retryForever} onChange={(e) => void handleToggleRetryForever(e.target.checked)} />
-            {t('codex.autoResume.retryForever', '持续重试（关闭后最多尝试 3 次）')}
-          </label>
+          <div className="codex-auto-resume-setting-item">
+            <label className="switch switch-sm">
+              <input type="checkbox" checked={retryForever} onChange={(e) => void handleToggleRetryForever(e.target.checked)} />
+              <span className="slider"></span>
+            </label>
+            <span className="setting-label" onClick={() => void handleToggleRetryForever(!retryForever)}>
+              {t('codex.autoResume.retryForever', '持续重试（关闭后最多尝试 3 次）')}
+            </span>
+          </div>
           <div className="codex-auto-resume-setting-item">
             <label className="switch switch-sm">
               <input
