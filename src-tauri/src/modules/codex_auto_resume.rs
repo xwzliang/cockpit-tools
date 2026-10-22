@@ -1376,11 +1376,25 @@ pub async fn detect_all_interrupted_tasks() -> Vec<InterruptedCodexTask> {
     all_tasks
 }
 
+async fn refresh_current_recovery_quota() -> Result<bool, String> {
+    let account = crate::modules::codex_account::get_current_account()
+        .ok_or_else(|| "No active Codex account".to_string())?;
+    let quota = crate::modules::codex_quota::refresh_account_quota(&account.id).await?;
+    if crate::modules::codex_account::get_current_account().map(|a| a.id) != Some(account.id) {
+        return Err("Active account changed during quota refresh; retry later".to_string());
+    }
+    // A reset timestamp alone does not prove that the server granted new quota.
+    Ok(quota.hourly_percentage > 0 && quota.weekly_percentage > 0)
+}
+
 pub async fn resume_task(
     task: &InterruptedCodexTask,
     custom_prompt: Option<String>,
     trigger_type: &str,
 ) -> Result<ResumeTaskResult, String> {
+    if !refresh_current_recovery_quota().await? {
+        return Err("Current account quota is exhausted; waiting for quota or account switch".to_string());
+    }
     let result = resume_task_internal(task, custom_prompt).await;
     let now_ts = Utc::now().timestamp();
     match &result {
@@ -2085,7 +2099,18 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
         }
         // Re-check immediately before each launch; detection's pool-wide quota is
         // insufficient when the active account has run out during this batch.
-        if !get_current_codex_quota_resets_at().2 { return; }
+        match refresh_current_recovery_quota().await {
+            Ok(true) => {}
+            Ok(false) => {
+                // The next scheduler pass uses the refreshed quota to switch accounts.
+                logger::log_info("[CodexAutoResume] Fresh quota exhausted; waiting for account switch");
+                return;
+            }
+            Err(error) => {
+                logger::log_warn(&format!("[CodexAutoResume] Fresh quota unavailable; recovery deferred: {error}"));
+                return;
+            }
+        }
         {
             let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
             if let Some(state) = retries.get_mut(&task.id) {
