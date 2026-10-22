@@ -417,6 +417,7 @@ pub fn get_general_config(app: tauri::AppHandle) -> Result<GeneralConfig, String
         codex_auto_resume_interrupted_tasks_enabled:
             user_config.codex_auto_resume_interrupted_tasks_enabled,
         codex_auto_resume_sync_ssh: user_config.codex_auto_resume_sync_ssh,
+        codex_auto_resume_retry_forever: user_config.codex_auto_resume_retry_forever,
         antigravity_auto_resume_interrupted_tasks_enabled:
             user_config.antigravity_auto_resume_interrupted_tasks_enabled,
         antigravity_auto_resume_sync_ssh: user_config.antigravity_auto_resume_sync_ssh,

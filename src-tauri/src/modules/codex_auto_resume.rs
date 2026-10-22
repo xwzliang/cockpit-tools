@@ -2071,6 +2071,7 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
             continue;
         }
         if task.source != "local" && !cfg.codex_auto_resume_sync_ssh { continue; }
+        if !cfg.codex_auto_resume_retry_forever && retry.attempts >= 3 { continue; }
         if now_ts < retry.next_attempt_at { continue; }
         match recovery_progress(&retry).await {
             RecoveryProgress::Finished => {

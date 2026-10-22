@@ -463,6 +463,8 @@ pub struct UserConfig {
     /// 自动恢复是否包含 SSH 服务器
     #[serde(default = "default_codex_auto_resume_sync_ssh")]
     pub codex_auto_resume_sync_ssh: bool,
+    #[serde(default = "retry_forever_default")]
+    pub codex_auto_resume_retry_forever: bool,
     /// 是否启用 Antigravity 受限中断任务自动恢复
     #[serde(default = "default_antigravity_auto_resume_interrupted_tasks_enabled")]
     pub antigravity_auto_resume_interrupted_tasks_enabled: bool,
@@ -1353,6 +1355,7 @@ impl Default for UserConfig {
             codex_auto_resume_interrupted_tasks_enabled:
                 default_codex_auto_resume_interrupted_tasks_enabled(),
             codex_auto_resume_sync_ssh: default_codex_auto_resume_sync_ssh(),
+            codex_auto_resume_retry_forever: true,
             antigravity_auto_resume_interrupted_tasks_enabled:
                 default_antigravity_auto_resume_interrupted_tasks_enabled(),
             antigravity_auto_resume_sync_ssh: default_antigravity_auto_resume_sync_ssh(),
@@ -3081,3 +3084,5 @@ mod tests {
         fs::remove_dir_all(dir).expect("remove temp dir");
     }
 }
+
+fn retry_forever_default() -> bool { true }

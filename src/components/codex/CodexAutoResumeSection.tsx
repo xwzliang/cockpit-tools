@@ -51,6 +51,7 @@ export function CodexAutoResumeSection({
     const saved = localStorage.getItem('codex_auto_resume_section_collapsed');
     return saved === 'true';
   });
+  const [retryForever, setRetryForever] = useState(true);
   const [autoResumeEnabled, setAutoResumeEnabled] = useState(false);
   const [syncSshEnabled, setSyncSshEnabled] = useState(true);
   const [autoApplyExpiringResetEnabled, setAutoApplyExpiringResetEnabled] = useState(true);
@@ -106,10 +107,12 @@ export function CodexAutoResumeSection({
   const loadConfig = useCallback(async () => {
     try {
       const cfg = await invoke<{
+        codex_auto_resume_retry_forever?: boolean;
         codex_auto_resume_interrupted_tasks_enabled?: boolean;
         codex_auto_resume_sync_ssh?: boolean;
         codex_auto_apply_reset_before_expiration_enabled?: boolean;
       }>('get_general_config');
+      setRetryForever(cfg.codex_auto_resume_retry_forever ?? true);
       setAutoResumeEnabled(Boolean(cfg.codex_auto_resume_interrupted_tasks_enabled));
       setSyncSshEnabled(cfg.codex_auto_resume_sync_ssh ?? true);
       setAutoApplyExpiringResetEnabled(cfg.codex_auto_apply_reset_before_expiration_enabled ?? true);
@@ -121,6 +124,13 @@ export function CodexAutoResumeSection({
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
+
+  const handleToggleRetryForever = async (enabled: boolean) => {
+    try {
+      await invoke('patch_general_config', { patch: { codex_auto_resume_retry_forever: enabled } });
+      setRetryForever(enabled);
+    } catch (err) { console.error('Failed to save retry policy:', err); }
+  };
 
   const handleToggleAutoResume = async (enabled: boolean) => {
     setAutoResumeEnabled(enabled);
@@ -452,6 +462,10 @@ export function CodexAutoResumeSection({
       {/* Settings bar for quick inline management */}
       {!effectiveCollapsed && (
         <div className="codex-auto-resume-settings-bar">
+          <label className="codex-auto-resume-setting-item">
+            <input type="checkbox" checked={retryForever} onChange={(e) => void handleToggleRetryForever(e.target.checked)} />
+            {t('codex.autoResume.retryForever', '持续重试（关闭后最多尝试 3 次）')}
+          </label>
           <div className="codex-auto-resume-setting-item">
             <label className="switch switch-sm">
               <input
