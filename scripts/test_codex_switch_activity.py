@@ -75,6 +75,16 @@ with tempfile.TemporaryDirectory() as folder:
     def detected():
         output = subprocess.check_output(['python3','-c',probe],env=env,text=True)
         return json.loads(output.split('__CODEX_AUTO_RESUME_JSON_START__')[1].split('__CODEX_AUTO_RESUME_JSON_END__')[0])
+    # Routing failures are recoverable only when the latest turn ended in error.
+    events(['task_started'])
+    with rollout.open('a') as stream:
+        stream.write('\n' + json.dumps({'type':'event_msg', 'payload':{'type':'task_complete', 'error':{'message':'workspace routing discovery failed','codex_error_info':'other'}}}))
+    assert len(detected()) == 1
+    with rollout.open('a') as stream:
+        stream.write('\n' + json.dumps({'type':'event_msg', 'payload':{'type':'task_started'}}))
+    assert detected() == []
+    events(['task_started', 'task_complete'])
+    assert detected() == []
     events(['task_started','turn_aborted'])
     tasks = detected()
     assert len(tasks)==1 and tasks[0]['restart_interrupted_at']==now

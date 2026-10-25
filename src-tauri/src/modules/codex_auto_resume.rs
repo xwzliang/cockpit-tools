@@ -317,7 +317,7 @@ def parse_rollout_tail(rollout_path):
                     if error_msg is None:
                         error_msg = err.get("message")
                     code = err.get("codex_error_info")
-                    if code == "usage_limit_exceeded" or (error_msg and "usage limit" in error_msg.lower()):
+                    if code == "usage_limit_exceeded" or (error_msg and any(text in error_msg.lower() for text in ("usage limit", "workspace routing discovery failed"))):
                         is_usage_limited = True
             
             elif p_type == "task_started":
@@ -794,6 +794,9 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
                         if error_msg.is_none() {
                             error_msg = Some(msg.to_string());
                         }
+                    }
+                    if error_msg.as_deref().is_some_and(|message| message.to_lowercase().contains("workspace routing discovery failed")) {
+                        is_usage_limited = true;
                     }
                     if let Some(code) = err.get("codex_error_info").and_then(|c| c.as_str()) {
                         if code == "usage_limit_exceeded"
@@ -2354,6 +2357,21 @@ pub async fn check_and_auto_apply_expiring_resets(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_resume_regression_terminal_routing_failure() {
+        let path = std::env::temp_dir().join(format!("cockpit-routing-{}.jsonl", uuid::Uuid::new_v4()));
+        let failed = r#"{"type":"event_msg","payload":{"type":"task_started"}}
+{"type":"event_msg","payload":{"type":"task_complete","error":{"message":"workspace routing discovery failed","codex_error_info":"other"}}}"#;
+        std::fs::write(&path, failed).unwrap();
+        assert!(parse_rollout_tail(&path).3);
+        for next in ["task_started", "task_complete"] {
+            std::fs::write(&path, format!("{}\n{}", failed, serde_json::json!({"type":"event_msg","payload":{"type":next}}))).unwrap();
+            assert!(!parse_rollout_tail(&path).3);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
 
     #[test]
     fn auto_resume_regression_macos_bundled_cli_and_model_preservation() {
