@@ -76,11 +76,16 @@ with tempfile.TemporaryDirectory() as folder:
         output = subprocess.check_output(['python3','-c',probe],env=env,text=True)
         return json.loads(output.split('__CODEX_AUTO_RESUME_JSON_START__')[1].split('__CODEX_AUTO_RESUME_JSON_END__')[0])
     # Only terminal errors qualify; newer running or completed turns supersede them.
-    for failure_message in ["workspace routing discovery failed", "Selected model is at capacity. Please try a different model."]:
+    for failure_message in ["workspace routing discovery failed", "Selected model is at capacity. Please try a different model.", "An entirely new backend failure", "Permission denied"]:
         events(['task_started'])
         with rollout.open('a') as stream:
             stream.write('\n' + json.dumps({'type':'event_msg', 'payload':{'type':'task_complete', 'error':{'message':failure_message,'codex_error_info':'other'}}}))
         assert len(detected()) == 1
+        original = rollout.read_text()
+        for terminal in ['turn_aborted', 'task_completed']:
+            rollout.write_text(original + '\n' + json.dumps({'type':'event_msg','payload':{'type':terminal, 'error':None}}))
+            assert detected() == []
+        rollout.write_text(original)
         with rollout.open('a') as stream:
             stream.write('\n' + json.dumps({'type':'event_msg', 'payload':{'type':'task_started'}}))
         assert detected() == []

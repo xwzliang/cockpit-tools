@@ -289,7 +289,6 @@ def parse_rollout_tail(rollout_path):
         reset_window_minutes = None
         error_msg = None
         is_usage_limited = False
-        has_task_complete = False
         
         for line in reversed(lines):
             line = line.strip()
@@ -302,28 +301,18 @@ def parse_rollout_tail(rollout_path):
             payload = data.get("payload", {})
             p_type = payload.get("type")
             
-            if p_type == "task_complete":
-                if has_task_complete:
-                    break
-                has_task_complete = True
-                
+            if data.get("type") != "event_msg":
+                continue
+            if p_type in ("task_complete", "task_completed"):
                 err = payload.get("error")
-                if err is None:
-                    # Latest turn completed cleanly without error!
-                    # Do not scan backwards into older turns for stale errors.
-                    break
-                
-                if isinstance(err, dict):
-                    if error_msg is None:
-                        error_msg = err.get("message")
-                    code = err.get("codex_error_info")
-                    if code == "usage_limit_exceeded" or (error_msg and any(text in error_msg.lower() for text in ("usage limit", "workspace routing discovery failed", "selected model is at capacity"))):
-                        is_usage_limited = True
-            
-            elif p_type == "task_started":
-                # Reached the start of the latest turn. Do not look into older turns.
+                if err is not None:
+                    error_msg = err.get("message") if isinstance(err, dict) else str(err)
+                    error_msg = error_msg or json.dumps(err)
+                    is_usage_limited = True  # Legacy flag: a terminal recoverable interruption.
                 break
-                        
+            elif p_type in ("task_started", "turn_aborted", "agent_reasoning", "agent_message", "exec_command_begin", "exec_command_end"):
+                break
+
             elif p_type == "token_count":
                 rl = payload.get("rate_limits", {})
                 pri = rl.get("primary")
@@ -333,8 +322,7 @@ def parse_rollout_tail(rollout_path):
                     if reset_window_minutes is None and pri.get("window_minutes"):
                         reset_window_minutes = pri.get("window_minutes")
                 reached = rl.get("rate_limit_reached_type")
-                if reached:
-                    is_usage_limited = True
+                # Quota telemetry alone does not prove the turn stopped.
                         
             if (resets_at or is_usage_limited) and error_msg:
                 break
@@ -420,7 +408,7 @@ def detect_interrupted_tasks():
                 
                 resets_at, reset_window_minutes, error_msg, is_limited = parse_rollout_tail(rollout_path)
                 
-                if not (g_status == "usage_limited" or is_limited):
+                if not is_limited:
                     continue
                 
                 seen_threads.add(thread_id)
@@ -772,7 +760,6 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
     let mut reset_window_minutes = None;
     let mut error_msg = None;
     let mut is_usage_limited = false;
-    let mut has_task_complete = false;
 
     for line in lines {
         let trimmed = line.trim();
@@ -783,38 +770,15 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
             let payload = val.get("payload");
             let p_type = payload.and_then(|p| p.get("type")).and_then(|t| t.as_str());
 
-            if p_type == Some("task_complete") {
-                if has_task_complete {
-                    break;
+            if val.get("type").and_then(|v| v.as_str()) != Some("event_msg") { continue; }
+            if matches!(p_type, Some("task_complete" | "task_completed")) {
+                if let Some(err) = payload.and_then(|p| p.get("error")).filter(|e| !e.is_null()) {
+                    error_msg = Some(err.get("message").and_then(|m| m.as_str())
+                        .map(str::to_string).unwrap_or_else(|| err.to_string()));
+                    is_usage_limited = true; // Legacy flag for a terminal interruption.
                 }
-                has_task_complete = true;
-
-                if let Some(err) = payload.and_then(|p| p.get("error")) {
-                    if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
-                        if error_msg.is_none() {
-                            error_msg = Some(msg.to_string());
-                        }
-                    }
-                    if error_msg.as_deref().is_some_and(|message| ["workspace routing discovery failed", "selected model is at capacity"].iter().any(|text| message.to_lowercase().contains(text))) {
-                        is_usage_limited = true;
-                    }
-                    if let Some(code) = err.get("codex_error_info").and_then(|c| c.as_str()) {
-                        if code == "usage_limit_exceeded"
-                            || error_msg
-                                .as_deref()
-                                .map(|m| m.to_lowercase().contains("usage limit"))
-                                .unwrap_or(false)
-                        {
-                            is_usage_limited = true;
-                        }
-                    }
-                } else {
-                    // Latest turn completed cleanly without error!
-                    // Do not scan backwards into older turns for stale errors.
-                    break;
-                }
-            } else if p_type == Some("task_started") {
-                // Reached start of current turn; stop scanning older turns.
+                break;
+            } else if matches!(p_type, Some("task_started" | "turn_aborted" | "agent_reasoning" | "agent_message" | "exec_command_begin" | "exec_command_end")) {
                 break;
             } else if p_type == Some("token_count") {
                 if let Some(rl) = payload.and_then(|p| p.get("rate_limits")) {
@@ -827,9 +791,7 @@ fn parse_rollout_tail(path: &Path) -> (Option<i64>, Option<i64>, Option<String>,
                                 pri.get("window_minutes").and_then(|w| w.as_i64());
                         }
                     }
-                    if rl.get("rate_limit_reached_type").is_some() {
-                        is_usage_limited = true;
-                    }
+                    // Quota telemetry alone does not prove interruption.
                 }
             }
 
@@ -1184,7 +1146,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                                 (None, None, None, false)
                             };
 
-                        if g_status != "usage_limited" && !is_limited {
+                        if !is_limited {
                             continue;
                         }
 
@@ -1377,6 +1339,12 @@ pub async fn detect_all_interrupted_tasks() -> Vec<InterruptedCodexTask> {
     }
 
     all_tasks
+}
+
+fn recovery_requires_intervention(message: Option<&str>) -> bool {
+    let message = message.unwrap_or("").to_lowercase();
+    ["unauthorized", "authentication", "invalid api key", "permission denied", "invalid configuration", "model not found"]
+        .iter().any(|reason| message.contains(reason))
 }
 
 async fn refresh_current_recovery_quota() -> Result<bool, String> {
@@ -1986,7 +1954,7 @@ try:
                     failed = failed or bool(payload.get("error"))
                     ended = True
                     result = "retry" if failed else "finished"
-                    continue
+                    break
                 if kind == "turn_aborted":
                     restart_at = args.get("restart_interrupted_at")
                     result = "retry" if not since and restart_at and int(timestamp(event.get("timestamp"))) == restart_at else "finished"
@@ -2100,6 +2068,7 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
             RecoveryProgress::Running => continue,
             RecoveryProgress::Retry => {}
         }
+        if recovery_requires_intervention(task.error_message.as_deref()) { continue; }
         // Re-check immediately before each launch; detection's pool-wide quota is
         // insufficient when the active account has run out during this batch.
         match refresh_current_recovery_quota().await {
@@ -2359,6 +2328,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn auto_resume_regression_general_terminal_failure() {
+        let path = std::env::temp_dir().join(format!("cockpit-general-{}.jsonl", uuid::Uuid::new_v4()));
+        let failure = serde_json::json!({"type":"event_msg","payload":{"type":"task_completed","error":{"message":"Previously unknown backend error"}}}).to_string();
+        std::fs::write(&path, &failure).unwrap();
+        assert!(parse_rollout_tail(&path).3);
+        for next in ["task_started", "task_complete", "task_completed", "turn_aborted", "exec_command_begin", "agent_reasoning"] {
+            std::fs::write(&path, format!("{}\n{}", failure, serde_json::json!({"type":"event_msg","payload":{"type":next,"error":null}}))).unwrap();
+            assert!(!parse_rollout_tail(&path).3, "{next}");
+        }
+        assert!(recovery_requires_intervention(Some("Permission denied")));
+        assert!(!recovery_requires_intervention(Some("Previously unknown backend error")));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn auto_resume_regression_terminal_model_capacity_failure() {
         let path = std::env::temp_dir().join(format!("cockpit-capacity-{}.jsonl", uuid::Uuid::new_v4()));
         let failed = serde_json::json!({"type":"event_msg","payload":{"type":"task_complete","error":{"message":"Selected model is at capacity. Please try a different model.","codex_error_info":"other"}}}).to_string();
@@ -2538,7 +2522,7 @@ for accepted in (True, False):
                 ("interrupted", (now - 100) * 1000, "exec_command_begin", "running"),
                 ("inProgress", (now - 100) * 1000, "task_complete", "finished"),
                 ("inProgress", (now - 100) * 1000, "error", "running"),
-                ("completed", now * 1000, "error_then_complete", "retry"),
+                ("completed", now * 1000, "error_then_complete", "finished"),
                 ("interrupted", (now - 100) * 1000, "error_while_running", "running"),
             ] {
                 let line = if rollout_kind.is_empty() { String::new() } else {
