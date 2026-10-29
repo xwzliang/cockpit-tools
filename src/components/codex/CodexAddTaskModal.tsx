@@ -27,6 +27,7 @@ import type {
   CodexQueuedTask,
   CodexThreadSummary,
   CreateQueuedTaskRequest,
+  TaskDeliveryMode,
 } from '../../types/codexTaskQueue';
 import { formatQueueTimeRemaining, parseLocalQueueDateTime, toLocalQueueDateTime } from '../../utils/codexQueueTime';
 import './CodexTaskQueueSection.css';
@@ -73,6 +74,8 @@ export function CodexAddTaskModal({
   const [threadMode, setThreadMode] = useState<'new' | 'existing'>(defaultThreadId ? 'existing' : 'new');
   const [selectedThreadId, setSelectedThreadId] = useState<string>(defaultThreadId || '');
 
+  const [deliveryMode, setDeliveryMode] = useState<TaskDeliveryMode>('wait');
+
   const [queueDate, setQueueDate] = useState('');
   const [queueTime, setQueueTime] = useState('');
   const [now, setNow] = useState(Date.now());
@@ -98,6 +101,7 @@ export function CodexAddTaskModal({
     setTitle(task?.title || '');
     setPrompt(task?.prompt || '');
     setModel(task?.model || '');
+    setDeliveryMode(task?.delivery_mode === 'steer' ? 'steer' : 'wait');
     const schedule = toLocalQueueDateTime(task?.queue_start_at);
     setQueueDate(schedule.date);
     setQueueTime(schedule.time);
@@ -265,6 +269,7 @@ export function CodexAddTaskModal({
 
       const req: CreateQueuedTaskRequest = {
         queue_start_at: queueStartAt,
+        delivery_mode: threadMode === 'existing' ? deliveryMode : 'wait',
         title: title.trim() || undefined,
         prompt: prompt.trim(),
         source,
@@ -471,7 +476,7 @@ export function CodexAddTaskModal({
               <button
                 type="button"
                 className={`segmented-btn ${threadMode === 'new' ? 'active' : ''}`}
-                onClick={() => setThreadMode('new')}
+                onClick={() => { setThreadMode('new'); setDeliveryMode('wait'); }}
               >
                 <Sparkles className="btn-icon" />
                 <span>{t('codexQueue.newThread', '新建独立会话')}</span>
@@ -525,8 +530,10 @@ export function CodexAddTaskModal({
                         <AlertTriangle className="warning-icon" />
                         <span>
                           {t(
-                            'codexQueue.threadInterruptedNotice',
-                            '提示：该会话当前存在受限中断任务。排队任务将优先恢复并等待中断任务执行完毕后，再自动提交本任务。'
+                            deliveryMode === 'steer' ? 'codexQueue.threadInterruptedSteerNotice' : 'codexQueue.threadInterruptedNotice',
+                            deliveryMode === 'steer'
+                              ? '提示：中断任务需先恢复。恢复后可向正在执行的轮次发送追加指令。'
+                              : '提示：该会话当前存在受限中断任务。排队任务将优先恢复并等待中断任务执行完毕后，再自动提交本任务。'
                           )}
                         </span>
                       </div>
@@ -536,6 +543,28 @@ export function CodexAddTaskModal({
               </div>
             )}
           </div>
+
+          {threadMode === 'existing' && (
+            <div className="form-group">
+              <label className="form-label" htmlFor="codex-queue-delivery-mode">
+                {t('codexQueue.deliveryMode', '会话正在执行时')}
+              </label>
+              <select
+                id="codex-queue-delivery-mode"
+                className="form-select"
+                value={deliveryMode}
+                onChange={(e) => setDeliveryMode(e.target.value as TaskDeliveryMode)}
+              >
+                <option value="wait">{t('codexQueue.deliveryWait', '等待当前任务完成')}</option>
+                <option value="steer">{t('codexQueue.deliverySteer', '立即发送到执行中的轮次（Steer）')}</option>
+              </select>
+              <small>
+                {deliveryMode === 'steer'
+                  ? t('codexQueue.deliverySteerHint', '到达入队时间且调度开启后，向当前轮次发送追加指令，不等待完成。沿用该轮次的模型和工作目录；下面的模型仅用于启动新轮次。没有执行中轮次时正常启动新轮次。需要连接持有该轮次的 Codex app-server。')
+                  : t('codexQueue.deliveryWaitHint', '到达入队时间后，等待当前任务及中断恢复完成，再按队列顺序启动新轮次。')}
+              </small>
+            </div>
+          )}
 
           {/* 4. Task Prompt */}
           <div className="form-group">

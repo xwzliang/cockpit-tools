@@ -19,6 +19,8 @@ pub enum TaskStatus {
     WaitingInterrupted,
     Running,
     Completed,
+    // Delivery acknowledged by an existing active turn; not turn completion.
+    Steered,
     Failed,
     Cancelled,
 }
@@ -30,10 +32,19 @@ impl TaskStatus {
             TaskStatus::WaitingInterrupted => "waiting_interrupted",
             TaskStatus::Running => "running",
             TaskStatus::Completed => "completed",
+            TaskStatus::Steered => "steered",
             TaskStatus::Failed => "failed",
             TaskStatus::Cancelled => "cancelled",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryMode {
+    #[default]
+    Wait,
+    Steer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +54,8 @@ pub struct CodexQueuedTask {
     pub prompt: String,
     #[serde(default)]
     pub queue_start_at: Option<i64>,
+    #[serde(default)]
+    pub delivery_mode: DeliveryMode,
     pub source: String, // "local" | "ssh"
     #[serde(default)]
     pub server_id: Option<String>,
@@ -62,6 +75,8 @@ pub struct CodexQueuedTask {
     pub output_preview: Option<String>,
     #[serde(default)]
     pub assigned_thread_id: Option<String>,
+    #[serde(default)]
+    pub assigned_turn_id: Option<String>,
     #[serde(default)]
     pub pid: Option<u32>,
     pub created_at: i64,
@@ -118,6 +133,8 @@ pub struct CreateQueuedTaskRequest {
     pub prompt: String,
     #[serde(default)]
     pub queue_start_at: Option<i64>,
+    #[serde(default)]
+    pub delivery_mode: DeliveryMode,
     pub source: String, // "local" | "ssh"
     pub server_id: Option<String>,
     pub server_name: Option<String>,
@@ -314,9 +331,11 @@ pub fn add_task(req: CreateQueuedTaskRequest) -> Result<CodexQueuedTask, String>
         error_message: None,
         output_preview: None,
         assigned_thread_id: None,
+        assigned_turn_id: None,
         pid: None,
         created_at: now,
         queue_start_at: req.queue_start_at,
+        delivery_mode: req.delivery_mode,
         started_at: None,
         completed_at: None,
     };
@@ -404,12 +423,14 @@ fn edit_task_fields(task: CodexQueuedTask) -> Result<CodexQueuedTask, String> {
     };
     existing.model = normalized_optional(task.model);
     existing.queue_start_at = task.queue_start_at;
+    existing.delivery_mode = if existing.thread_id.is_some() { task.delivery_mode } else { DeliveryMode::Wait };
     if target_changed {
         // Waiting/error information belongs to the old target. A previously
         // assigned thread must not silently override the newly selected target.
         existing.status = TaskStatus::Pending;
         existing.error_message = None;
         existing.assigned_thread_id = None;
+        existing.assigned_turn_id = None;
     }
     let updated = existing.clone();
     save_tasks(&tasks)?;
@@ -473,6 +494,7 @@ pub fn retry_task(task_id: &str) -> Result<(), String> {
         task.started_at = None;
         task.completed_at = None;
         task.pid = None;
+        task.assigned_turn_id = None;
         save_tasks(&tasks)?;
         logger::log_info(&format!("[CodexTaskQueue] 重试任务: id={}", task_id));
         Ok(())
@@ -484,7 +506,7 @@ pub fn retry_task(task_id: &str) -> Result<(), String> {
 pub fn clear_completed_tasks() -> Result<(), String> {
     let _guard = queue_lock().lock().unwrap();
     let mut tasks = load_tasks();
-    tasks.retain(|t| t.status != TaskStatus::Completed && t.status != TaskStatus::Cancelled);
+    tasks.retain(|t| t.status != TaskStatus::Completed && t.status != TaskStatus::Cancelled && t.status != TaskStatus::Steered);
     save_tasks(&tasks)?;
     logger::log_info("[CodexTaskQueue] 清空已完成/已取消的任务");
     Ok(())
@@ -1006,10 +1028,11 @@ def execute():
     prompt = data.get("prompt", "")
     cwd = data.get("cwd")
     model = data.get("model")
+    steer_only = bool(data.get("steer_only", False))
     task_id = data.get("task_id", "default")
     
     codex_home_env = os.environ.get("CODEX_HOME")
-    codex_home = Path(codex_home_env) if codex_home_env else (Path.home() / ".codex")
+    codex_home = Path(data.get("codex_home") or codex_home_env or str(Path.home() / ".codex")).expanduser()
 
     # Inherit model from thread if not explicitly specified
     if not model and thread_id:
@@ -1056,7 +1079,14 @@ def execute():
                 f"Sec-WebSocket-Version: 13\r\n\r\n"
             )
             s.sendall(req.encode('ascii'))
-            resp = s.recv(4096).decode('latin1')
+            handshake = bytearray()
+            while not handshake.endswith(b"\r\n\r\n"):
+                chunk = s.recv(1)
+                if not chunk: raise RuntimeError("WebSocket handshake closed")
+                handshake.extend(chunk)
+                if len(handshake) > 16384: raise RuntimeError("Invalid WebSocket handshake")
+            if b" 101 " not in handshake.split(b"\r\n", 1)[0]:
+                raise RuntimeError("Codex control socket rejected WebSocket connection")
 
             def send_ws(msg):
                 data_b = msg.encode('utf-8')
@@ -1075,33 +1105,84 @@ def execute():
                 masked = bytearray(data_b[i] ^ mask_key[i % 4] for i in range(length))
                 s.sendall(header + masked)
 
-            def read_ws_msg():
-                b1, b2 = s.recv(2)
-                masked = bool(b2 & 0x80)
-                length = b2 & 0x7F
-                if length == 126:
-                    length = int.from_bytes(s.recv(2), 'big')
-                elif length == 127:
-                    length = int.from_bytes(s.recv(8), 'big')
-                mask_key = s.recv(4) if masked else b''
+            def read_exact(size):
                 buf = bytearray()
-                rem = length
-                while rem > 0:
-                    chunk = s.recv(min(65536, rem))
-                    if not chunk: break
+                while len(buf) < size:
+                    chunk = s.recv(size - len(buf))
+                    if not chunk: raise RuntimeError("Codex connection closed")
                     buf.extend(chunk)
-                    rem -= len(chunk)
-                if masked:
-                    for i in range(len(buf)):
-                        buf[i] ^= mask_key[i % 4]
-                return buf.decode('utf-8', errors='ignore')
+                return bytes(buf)
 
-            # Initialize
-            send_ws(json.dumps({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"cockpit-tools-queue","version":"1.0"}}}))
-            while True:
-                msg = json.loads(read_ws_msg())
-                if msg.get("id") == 1:
-                    break
+            def read_ws_msg():
+                fragments = bytearray()
+                while True:
+                    b1, b2 = read_exact(2)
+                    opcode, final = b1 & 0x0f, bool(b1 & 0x80)
+                    length = b2 & 0x7f
+                    if length == 126: length = int.from_bytes(read_exact(2), 'big')
+                    elif length == 127: length = int.from_bytes(read_exact(8), 'big')
+                    if length > 32 * 1024 * 1024: raise RuntimeError("Oversized Codex response")
+                    mask = read_exact(4) if b2 & 0x80 else None
+                    payload = read_exact(length)
+                    if mask: payload = bytes(v ^ mask[i % 4] for i, v in enumerate(payload))
+                    if opcode == 8: raise RuntimeError("Codex WebSocket closed")
+                    if opcode == 9:
+                        key = os.urandom(4)
+                        s.sendall(bytes([0x8a, 0x80 | len(payload)]) + key + bytes(v ^ key[i % 4] for i, v in enumerate(payload)))
+                        continue
+                    if opcode == 10: continue
+                    if opcode not in (0, 1): raise RuntimeError("Unexpected WebSocket frame")
+                    fragments.extend(payload)
+                    if final: return fragments.decode('utf-8')
+
+            def rpc(request_id, method, params):
+                send_ws(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}))
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline:
+                    s.settimeout(max(0.1, deadline - time.monotonic()))
+                    reply = json.loads(read_ws_msg())
+                    if reply.get("id") == request_id: return reply
+                raise RuntimeError("Codex request timed out")
+
+            initialized = rpc(1, "initialize", {"clientInfo": {"name": "cockpit-tools-queue", "version": "1.0"}})
+            if "error" in initialized:
+                raise RuntimeError(str(initialized["error"]))
+            send_ws(json.dumps({"jsonrpc": "2.0", "method": "initialized"}))
+
+            if steer_only:
+                if not thread_id:
+                    s.close()
+                    return {"success": False, "message": "Steer 需要已有会话"}
+                snapshot = rpc(10, "thread/read", {"threadId": thread_id, "includeTurns": True})
+                if "error" in snapshot:
+                    s.close()
+                    return {"success": False, "message": "无法读取活动轮次；当前 Codex 控制服务可能不支持 Steer: " + str(snapshot["error"])}
+                thread = snapshot.get("result", {}).get("thread", {})
+                active_turns = [turn for turn in thread.get("turns", []) if turn.get("status") == "inProgress"]
+                if not active_turns:
+                    # If server reports busy but omits turns, never start another
+                    # generation based on incomplete discovery.
+                    thread_status = thread.get("status", {})
+                    if isinstance(thread_status, dict) and thread_status.get("type") == "active":
+                        s.close()
+                        return {"success": False, "message": "会话活动中，但服务未提供轮次 ID；未发送消息，请更新 Codex 后重试。"}
+                    s.close()
+                    return {"success": False, "deferred": True}
+                turn_id = active_turns[-1].get("id")
+                if not turn_id: raise RuntimeError("Active turn ID missing")
+                # No model/cwd overrides: steering keeps the active turn's config.
+                # Never fall back/retry after a steer send: a transport timeout
+                # can mean it was accepted and its response was lost.
+                reply = rpc(11, "turn/steer", {"threadId": thread_id, "expectedTurnId": turn_id, "input": [{"type": "text", "text": prompt}]})
+                if "error" in reply:
+                    s.close()
+                    return {"success": False, "message": "Steer 未被接受（轮次可能已结束或 Codex 不支持此操作）；请检查会话后重试或选择等待完成: " + str(reply["error"])}
+                accepted_turn = reply.get("result", {}).get("turnId")
+                if accepted_turn != turn_id:
+                    raise RuntimeError("Steer acknowledgement missing/mismatched; verify thread before retry")
+                s.close()
+                return {"success": True, "mode": "steer", "thread_id": thread_id, "turn_id": accepted_turn,
+                        "message": "消息已发送至当前轮次（不代表该轮次已完成）"}
 
             active_thread_id = thread_id
             if not active_thread_id:
@@ -1167,7 +1248,10 @@ def execute():
                 try: s.close()
                 except: pass
             if connected:
-                return {"success": False, "message": f"Codex 通信异常: {str(e)}"}
+                return {"success": False, "message": f"Codex 通信异常，发送结果可能未知；请检查会话后再重试（未自动重发）: {str(e)}"}
+
+    if steer_only:
+        return {"success": False, "message": "无法连接拥有活动轮次的 Codex 控制 socket；Steer 不支持 CLI 降级。请打开/更新目标环境的 Codex 或选择等待完成。"}
 
     # 2. Fallback to CLI only if app-server socket is not connected
     codex_bin = subprocess.getoutput("which codex").strip() or str(Path.home() / ".local/bin/codex")
@@ -1297,7 +1381,7 @@ fn queue_time_reached(at: Option<i64>, now: i64) -> bool {
     at.map_or(true, |at| at <= now)
 }
 
-async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
+async fn launch_task(task: &mut CodexQueuedTask, steer_only: bool) -> Result<bool, String> {
     if (task.model.is_none() || task.model.as_ref().map(|m| m.trim().is_empty()).unwrap_or(false))
         && task.source == "local"
     {
@@ -1307,11 +1391,12 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
     }
 
     let payload = serde_json::json!({
-        "thread_id": task.thread_id,
+        "thread_id": task.thread_id.as_ref().or(task.assigned_thread_id.as_ref()),
         "prompt": task.prompt,
         "cwd": task.cwd,
         "model": task.model,
-        "task_id": task.id
+        "task_id": task.id,
+        "steer_only": steer_only
     })
     .to_string();
     let b64_payload = BASE64_STANDARD.encode(payload.as_bytes());
@@ -1337,6 +1422,9 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
                 if let (Some(s_idx), Some(e_idx)) = (stdout.find(start_tag), stdout.find(end_tag)) {
                     let json_str = stdout[s_idx + start_tag.len()..e_idx].trim();
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        if val.get("deferred").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            return Ok(false);
+                        }
                         if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                             if let Some(tid) = val.get("thread_id").and_then(|v| v.as_str()) {
                                 if !tid.is_empty() {
@@ -1346,13 +1434,15 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
                             if let Some(pid) = val.get("pid").and_then(|v| v.as_u64()) {
                                 task.pid = Some(pid as u32);
                             }
-                            task.status = TaskStatus::Running;
+                            task.assigned_turn_id = val.get("turn_id").and_then(|v| v.as_str()).map(str::to_owned);
+                            task.status = if steer_only { TaskStatus::Steered } else { TaskStatus::Running };
                             task.started_at = Some(Utc::now().timestamp());
+                            task.error_message = None;
                             logger::log_info(&format!(
                                 "[CodexTaskQueue] 成功启动本地排队任务: id={}, thread_id={:?}",
                                 task.id, task.assigned_thread_id
                             ));
-                            return Ok(());
+                            return Ok(true);
                         } else {
                             let msg = val
                                 .get("message")
@@ -1365,6 +1455,9 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
             }
         }
 
+        if steer_only {
+            return Err("未能确认 Steer 请求结果；未使用 CLI 重发。请检查会话后再重试。".to_string());
+        }
         // Direct CLI fallback if python helper fails
         let binary = crate::modules::codex_wakeup::resolve_binary()
             .map_err(|e| format!("未找到本地 Codex CLI: {}", e.message))?;
@@ -1407,7 +1500,7 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
             task.id,
             spawned.id()
         ));
-        Ok(())
+        Ok(true)
     } else if task.source == "ssh" {
         let server_id = task
             .server_id
@@ -1421,13 +1514,20 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
             .find(|s| s.id == server_id)
             .ok_or_else(|| format!("未找到目标 SSH 服务器: {}", server_id))?;
 
+        let mut ssh_payload: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|error| format!("构建 SSH 派发请求失败: {}", error))?;
+        ssh_payload["codex_home"] = serde_json::json!(server.codex_home);
+        let ssh_b64_payload = BASE64_STANDARD.encode(ssh_payload.to_string().as_bytes());
         let output = ssh_server::run_ssh(
             &server,
-            25,
-            &["python3", "-", &b64_payload],
+            35,
+            &["python3", "-", &ssh_b64_payload],
             Some(PYTHON_QUEUE_EXECUTE.to_string()),
         )
-        .await?;
+        .await
+        .map_err(|error| if steer_only {
+            format!("远端 Steer 通信失败，发送结果可能未知；请检查会话后再重试（未自动重发）: {}", error)
+        } else { error })?;
 
         let start_tag = "__CODEX_QUEUE_EXEC_JSON_START__";
         let end_tag = "__CODEX_QUEUE_EXEC_JSON_END__";
@@ -1435,6 +1535,9 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
         if let (Some(s_idx), Some(e_idx)) = (output.find(start_tag), output.find(end_tag)) {
             let json_str = output[s_idx + start_tag.len()..e_idx].trim();
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                if val.get("deferred").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    return Ok(false);
+                }
                 if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
                     if let Some(tid) = val.get("thread_id").and_then(|v| v.as_str()) {
                         if !tid.is_empty() {
@@ -1444,13 +1547,15 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
                     if let Some(pid) = val.get("pid").and_then(|v| v.as_u64()) {
                         task.pid = Some(pid as u32);
                     }
-                    task.status = TaskStatus::Running;
+                    task.assigned_turn_id = val.get("turn_id").and_then(|v| v.as_str()).map(str::to_owned);
+                    task.status = if steer_only { TaskStatus::Steered } else { TaskStatus::Running };
                     task.started_at = Some(Utc::now().timestamp());
+                    task.error_message = None;
                     logger::log_info(&format!(
                         "[CodexTaskQueue] 成功在 SSH 服务器【{}】启动排队任务: id={}",
                         server.name, task.id
                     ));
-                    return Ok(());
+                    return Ok(true);
                 } else {
                     let err = val
                         .get("message")
@@ -1461,6 +1566,9 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
             }
         }
 
+        if steer_only {
+            return Err("未能确认远端 Steer 请求结果；未使用 CLI 重发。请检查会话后再重试。".to_string());
+        }
         // SSH CLI fallback script
         let safe_cwd = if task.cwd.is_empty() { "$HOME" } else { &task.cwd };
         let escaped_prompt = task.prompt.replace('\'', "'\\''");
@@ -1498,7 +1606,7 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
             "[CodexTaskQueue] 通过 CLI 降级在 SSH 服务器【{}】启动排队任务: id={}",
             server.name, task.id
         ));
-        Ok(())
+        Ok(true)
     } else {
         Err(format!("未知任务来源: {}", task.source))
     }
@@ -1692,10 +1800,6 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
 
     // 4. Iterate pending or waiting_interrupted tasks in queue order
     for idx in 0..tasks.len() {
-        if current_running >= max_allowed {
-            break;
-        }
-
         if !queue_time_reached(tasks[idx].queue_start_at, Utc::now().timestamp()) { continue; }
         let task_status = tasks[idx].status.clone();
         if task_status != TaskStatus::Pending && task_status != TaskStatus::WaitingInterrupted {
@@ -1706,6 +1810,49 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
             .thread_id
             .clone()
             .or_else(|| tasks[idx].assigned_thread_id.clone());
+
+        // A previously delivered task interrupted by quota must be observed
+        // after recovery, not delivered again as a new prompt/steer.
+        if tasks[idx].started_at.is_some() && task_status == TaskStatus::WaitingInterrupted {
+            let still_interrupted = target_thread_id.as_ref().map_or(false, |tid| {
+                interrupted_tasks.iter().any(|it| it.thread_id == *tid
+                    && it.source == tasks[idx].source && it.server_id == tasks[idx].server_id)
+            });
+            if !still_interrupted {
+                tasks[idx].status = TaskStatus::Running;
+                tasks[idx].error_message = None;
+                current_running += 1;
+                if let Some(ref tid) = target_thread_id {
+                    busy_threads.insert((tasks[idx].source.clone(), tasks[idx].server_id.clone(), tid.clone()));
+                }
+                updated = true;
+                continue;
+            }
+        }
+
+        // Steering adds input to an existing turn, not a new concurrent task.
+        // Probe the owning app-server, not a potentially stale history snapshot.
+        // It may bypass waiting messages/capacity, but never queue admission time.
+        if tasks[idx].delivery_mode == DeliveryMode::Steer
+            && target_thread_id.is_some() && tasks[idx].started_at.is_none() {
+            let mut task_to_steer = tasks[idx].clone();
+            match launch_task(&mut task_to_steer, true).await {
+                Ok(true) => {
+                    tasks[idx] = task_to_steer;
+                    updated = true;
+                    continue;
+                }
+                Ok(false) => {} // No live turn: normal scheduling below.
+                Err(error) => {
+                    tasks[idx].status = TaskStatus::Failed;
+                    tasks[idx].error_message = Some(error);
+                    tasks[idx].completed_at = Some(now_ts);
+                    updated = true;
+                    continue;
+                }
+            }
+        }
+        if current_running >= max_allowed { continue; }
 
         // Helper to check if this thread is currently busy in Codex
         let thread_is_busy = if let Some(ref tid) = target_thread_id {
@@ -1854,8 +2001,8 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
 
         // Eligible to launch!
         let mut task_to_launch = tasks[idx].clone();
-        match launch_task(&mut task_to_launch).await {
-            Ok(()) => {
+        match launch_task(&mut task_to_launch, false).await {
+            Ok(true) => {
                 tasks[idx] = task_to_launch;
                 if let Some(tid) = tasks[idx].thread_id.as_deref().or(tasks[idx].assigned_thread_id.as_deref()) {
                     busy_threads.insert((tasks[idx].source.clone(), tasks[idx].server_id.clone(), tid.to_string()));
@@ -1864,6 +2011,7 @@ async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), 
                 current_running += 1;
                 updated = true;
             }
+            Ok(false) => {} // A live-turn race must not submit the same prompt twice.
             Err(e) => {
                 logger::log_warn(&format!(
                     "[CodexTaskQueue] 启动排队任务失败: id={}, error={}",
@@ -1922,6 +2070,7 @@ mod tests {
     fn test_add_and_reorder_tasks() {
         let req1 = CreateQueuedTaskRequest {
             queue_start_at: None,
+            delivery_mode: DeliveryMode::Wait,
             title: Some("Task 1".to_string()),
             prompt: "Prompt 1".to_string(),
             source: "local".to_string(),
@@ -1934,6 +2083,7 @@ mod tests {
         };
         let req2 = CreateQueuedTaskRequest {
             queue_start_at: None,
+            delivery_mode: DeliveryMode::Wait,
             title: Some("Task 2".to_string()),
             prompt: "Prompt 2".to_string(),
             source: "local".to_string(),
@@ -1970,6 +2120,7 @@ mod tests {
     fn test_retry_and_clear_completed() {
         let req = CreateQueuedTaskRequest {
             queue_start_at: None,
+            delivery_mode: DeliveryMode::Wait,
             title: Some("Task to fail".to_string()),
             prompt: "Prompt".to_string(),
             source: "local".to_string(),

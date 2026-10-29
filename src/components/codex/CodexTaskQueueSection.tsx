@@ -242,7 +242,7 @@ export function CodexTaskQueueSection({
     (t) => t.status === 'pending' || t.status === 'waiting_interrupted' || t.status === 'running'
   );
   const finishedTasks = tasks.filter(
-    (t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'
+    (t) => t.status === 'steered' || t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'
   );
   const displayedTasks = activeTab === 'queue' ? activeTasks : finishedTasks;
 
@@ -251,6 +251,7 @@ export function CodexTaskQueueSection({
     (t) => t.status === 'pending' || t.status === 'waiting_interrupted'
   ).length;
   const completedCount = tasks.filter((t) => t.status === 'completed').length;
+  const clearableCount = tasks.filter((t) => ['completed', 'steered', 'cancelled'].includes(t.status)).length;
 
   const renderStatusBadge = (status: TaskStatus) => {
     switch (status) {
@@ -273,6 +274,13 @@ export function CodexTaskQueueSection({
           <span className="queue-status-badge pending">
             <Clock className="badge-icon" />
             <span>{t('codexQueue.statusPending', '排队中')}</span>
+          </span>
+        );
+      case 'steered':
+        return (
+          <span className="queue-status-badge steered">
+            <MessageSquare className="badge-icon" />
+            <span>{t('codexQueue.statusSteered', '已发送至当前轮次')}</span>
           </span>
         );
       case 'completed':
@@ -300,7 +308,7 @@ export function CodexTaskQueueSection({
   };
 
   const formatDuration = (task: CodexQueuedTask) => {
-    if (!task.started_at) return null;
+    if (!task.started_at || task.status === 'steered') return null;
     const end = task.completed_at || Math.floor(Date.now() / 1000);
     const secs = Math.max(0, end - task.started_at);
     if (secs < 60) return `${secs}s`;
@@ -344,7 +352,7 @@ export function CodexTaskQueueSection({
             <p className="section-subtitle">
               {t(
                 'codexQueue.subtitle',
-                '多任务排队执行 · 同会话严格串行 · 跨会话并发或串行 · 优先恢复中断任务'
+                '任务排队 · 可等待完成或立即 Steer · 跨会话并发或串行'
               )}
             </p>
           </div>
@@ -358,7 +366,7 @@ export function CodexTaskQueueSection({
                 type="button"
                 className={`mode-btn ${config.concurrency_mode === 'sequential' ? 'active' : ''}`}
                 onClick={() => handleModeChange('sequential')}
-                title={t('codexQueue.sequentialTip', '全局顺序串行执行：每次仅执行一个任务')}
+                title={t('codexQueue.sequentialTip', '每次仅启动一个新任务；Steer 可追加到正在执行的轮次')}
               >
                 <span>{t('codexQueue.sequential', '顺序执行')}</span>
               </button>
@@ -366,7 +374,7 @@ export function CodexTaskQueueSection({
                 type="button"
                 className={`mode-btn ${config.concurrency_mode === 'concurrent' ? 'active' : ''}`}
                 onClick={() => handleModeChange('concurrent')}
-                title={t('codexQueue.concurrentTip', '跨会话/跨项目并发执行：同一会话仍保持串行')}
+                title={t('codexQueue.concurrentTip', '跨会话/跨项目并发执行；同会话可选择等待或 Steer')}
               >
                 <span>{t('codexQueue.concurrent', '并发执行')}</span>
               </button>
@@ -419,15 +427,15 @@ export function CodexTaskQueueSection({
             <span>{t('codexQueue.addTask', '添加任务')}</span>
           </button>
 
-          {completedCount > 0 && (
+          {clearableCount > 0 && (
             <button
               type="button"
               className="action-btn secondary-btn"
               onClick={handleClearCompleted}
-              title={t('codexQueue.clearCompleted', '清空已完成任务')}
+              title={t('codexQueue.clearCompleted', '清空已完成、已发送或已取消任务')}
             >
               <Trash2 className="btn-icon" />
-              <span>{t('codexQueue.clearCompletedBtn', '清空完成')}</span>
+              <span>{t('codexQueue.clearCompletedBtn', '清空已处理')}</span>
             </button>
           )}
 
@@ -473,7 +481,7 @@ export function CodexTaskQueueSection({
               <span>
                 {t(
                   'codexQueue.rulesDesc',
-                  '同一会话内的任务按先后顺序严格串行执行；若会话存在受限中断任务，系统将优先自动恢复中断任务并在其完成后继续派发排队任务；不同会话或项目按上方设置支持并发展开。'
+                  '默认等待当前任务完成后按队列顺序派发。选择 Steer 的任务到达入队时间后可向执行中的轮次追加指令，无需等待完成；沿用该轮次的模型和设置。受限中断仍需先恢复，不同会话或项目按上方设置并发执行。'
                 )}
               </span>
             </div>
@@ -521,15 +529,15 @@ export function CodexTaskQueueSection({
                   <Plus className="btn-icon" />
                   <span>{t('codexQueue.addTask', '添加排队任务')}</span>
                 </button>
-                {completedCount > 0 && (
+                {clearableCount > 0 && (
                   <button
                     type="button"
                     className="btn-clear-completed"
                     onClick={handleClearCompleted}
-                    title={t('codexQueue.clearCompleted', '清空已完成任务')}
+                    title={t('codexQueue.clearCompleted', '清空已完成、已发送或已取消任务')}
                   >
                     <Trash2 className="btn-icon" />
-                    <span>{t('codexQueue.clearCompletedBtn', '清空完成')}</span>
+                    <span>{t('codexQueue.clearCompletedBtn', '清空已处理')}</span>
                   </button>
                 )}
               </div>
@@ -676,6 +684,14 @@ export function CodexTaskQueueSection({
                               )}
                             </span>
 
+                            {task.thread_id && (
+                              <span className="meta-chip delivery-mode">
+                                <span>{task.delivery_mode === 'steer'
+                                  ? t('codexQueue.deliverySteerBadge', 'Steer 执行中轮次')
+                                  : t('codexQueue.deliveryWaitBadge', '等待完成')}</span>
+                              </span>
+                            )}
+
                             {/* Model */}
                             {task.model && (
                               <span className="meta-chip model">
@@ -706,6 +722,12 @@ export function CodexTaskQueueSection({
                           )}
                         </div>
 
+                        {task.status === 'steered' && (
+                          <p className="task-steered-notice" title={task.assigned_turn_id}>
+                            {t('codexQueue.steeredNotice', '指令已被执行中的轮次接收；这不表示该轮次已完成。')}
+                          </p>
+                        )}
+
                         {/* Waiting Interrupted Notice or Error banner */}
                         {task.status === 'waiting_interrupted' && (
                           <div className="task-waiting-interrupted-banner">
@@ -713,8 +735,10 @@ export function CodexTaskQueueSection({
                             <span>
                               {task.error_message ||
                                 t(
-                                  'codexQueue.waitingInterruptedDesc',
-                                  '检测到当前会话存在用量中断的任务。调度器已优先恢复该任务，待其完全执行完成后自动提交本任务。'
+                                  task.delivery_mode === 'steer' ? 'codexQueue.threadInterruptedSteerNotice' : 'codexQueue.waitingInterruptedDesc',
+                                  task.delivery_mode === 'steer'
+                                    ? '中断任务需先恢复，恢复后可向执行中的轮次追加指令。'
+                                    : '检测到当前会话存在用量中断的任务。调度器已优先恢复该任务，待其完全执行完成后自动提交本任务。'
                                 )}
                             </span>
                           </div>
@@ -739,7 +763,7 @@ export function CodexTaskQueueSection({
                           )}
                           {task.completed_at && (
                             <span className="timestamp-text">
-                              · 完成于 {new Date(task.completed_at * 1000).toLocaleTimeString()}
+                              · {task.status === 'steered' ? t('codexQueue.acceptedAt', '接收于') : t('codexQueue.completedAt', '完成于')} {new Date(task.completed_at * 1000).toLocaleTimeString()}
                             </span>
                           )}
                           {task.assigned_thread_id && (

@@ -3,14 +3,18 @@ export type TaskStatus =
   | 'waiting_interrupted'
   | 'running'
   | 'completed'
+  | 'steered'
   | 'failed'
   | 'cancelled';
+
+export type TaskDeliveryMode = 'wait' | 'steer';
 
 export interface CodexQueuedTask {
   id: string;
   title: string;
   prompt: string;
   queue_start_at?: number;
+  delivery_mode?: TaskDeliveryMode;
   source: 'local' | 'ssh';
   server_id?: string;
   server_name?: string;
@@ -22,6 +26,7 @@ export interface CodexQueuedTask {
   error_message?: string;
   output_preview?: string;
   assigned_thread_id?: string;
+  assigned_turn_id?: string;
   pid?: number;
   created_at: number;
   started_at?: number;
@@ -59,6 +64,7 @@ export interface CreateQueuedTaskRequest {
   title?: string;
   prompt: string;
   queue_start_at?: number;
+  delivery_mode?: TaskDeliveryMode;
   source: 'local' | 'ssh';
   server_id?: string;
   server_name?: string;
