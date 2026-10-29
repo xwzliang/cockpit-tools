@@ -9,6 +9,22 @@ const CODEX_MODEL_PROVIDERS_FILE: &str = "codex_model_providers.json";
 const CODEX_MODEL_PROVIDER_TEST_TIMEOUT_SECS: u64 = 20;
 
 #[tauri::command]
+pub async fn codex_query_openai_api_usage(
+    admin_key: String,
+    api_key_id: Option<String>,
+    project_id: Option<String>,
+    range: String,
+) -> Result<crate::modules::openai_api_usage::OpenAiApiUsage, String> {
+    crate::modules::openai_api_usage::query_usage(
+        &admin_key,
+        api_key_id.as_deref(),
+        project_id.as_deref(),
+        &range,
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn load_codex_account_groups() -> Result<String, String> {
     let path = account::get_data_dir()?.join(CODEX_GROUPS_FILE);
     if !path.exists() {

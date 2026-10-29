@@ -1121,6 +1121,7 @@ pub fn run() {
             commands::codex::codex_cancel_model_provider_chat_test,
             commands::codex::codex_list_model_provider_models,
             commands::codex::codex_query_model_provider_usage,
+            commands::codex::codex_query_openai_api_usage,
             commands::codex::codex_local_access_get_state,
             commands::codex::codex_list_instance_gateways,
             commands::codex::codex_stop_instance_gateway,

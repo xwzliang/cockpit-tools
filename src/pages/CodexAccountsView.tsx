@@ -12,6 +12,7 @@ import { isCodexApiKeyAccount, type CodexAccount } from "../types/codex";
 import type { useCodexAccountsPageController } from "./CodexAccountsPage";
 import { CodexOAuthBindingModal } from "./CodexOAuthBindingModal";
 import { CodexAccountsOverviewPanel } from "./CodexAccountsOverviewPanel";
+import { OpenAiApiUsagePanel } from "../components/codex/OpenAiApiUsagePanel";
 
 
 export type CodexAccountsViewProps = ReturnType<typeof useCodexAccountsPageController>;
@@ -822,6 +823,7 @@ export function CodexAccountsView(props: CodexAccountsViewProps) {
       {renderQuotaErrorDetailModal()}
 
       {activeTab === "overview" && <CodexAccountsOverviewPanel {...props} />}
+      {activeTab === "overview" && <OpenAiApiUsagePanel />}
 
       {cliLaunchModal && (
         <CodexCliLaunchDialog

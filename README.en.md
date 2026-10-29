@@ -129,6 +129,7 @@ Run multiple Antigravity IDE instances in parallel with different accounts. For 
 - **Dedicated Support**: Optimized account management experience for Codex
 - **Quota Display**: Clear display of Hourly and Weekly quota status
 - **Plan Recognition**: Automatically identifies account Plan types (Basic, Plus, Team, etc.)
+- **OpenAI API Usage**: Below the Codex accounts, query API costs and completions request/token totals for today, month to date, or the last 30 days (UTC). Supply an [organization Admin API key](https://platform.openai.com/settings/organization/admin-keys); ordinary API keys cannot read reporting APIs. Optional API key ID and project ID filters restrict the reports; empty filters show organization totals. The Admin key is kept only in memory while this view is open. Remaining prepaid credits must be checked through the billing link because no documented credit-balance API is available.
 - **API Service**: The local Codex API service is powered by the bundled CLIProxyAPI sidecar. Cockpit Tools handles account sync, config projection, status, and usage statistics while keeping the same Base URL, API keys, and user workflow.
 
 > ![Codex Accounts](docs/images/codex_list.png)

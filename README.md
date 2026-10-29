@@ -130,6 +130,7 @@
 - **专属支持**：专为 Codex 优化的账号管理体验
 - **配额展示**：清晰展示 Hourly 和 Weekly 配额状态
 - **计划识别**：自动识别账号 Plan 类型 (Basic, Plus, Team 等)
+- **OpenAI API 用量**：在 Codex 账号下方，使用[组织管理员 API Key](https://platform.openai.com/settings/organization/admin-keys)查询今天、本月至今或最近 30 天（UTC）的 API 费用及 completions 请求数和 Token 用量。普通 API Key 无法读取用量报告；可通过 API Key ID 和项目 ID 筛选，留空显示组织总用量。管理员密钥仅在此视图打开时保存在内存中。OpenAI 尚未提供有文档说明的余额查询 API，请通过账单链接查看剩余余额。
 - **API 服务**：本地 Codex API 服务由内置 CLIProxyAPI sidecar 驱动，Cockpit Tools 负责账号同步、配置投影、状态与用量统计；Base URL、API Key 与用户操作方式保持不变。
 
 > ![Codex Accounts](docs/images/codex_list.png)
