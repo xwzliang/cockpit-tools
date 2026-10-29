@@ -22,8 +22,15 @@ pub async fn codex_queue_add_task(
 }
 
 #[tauri::command]
-pub fn codex_queue_update_task(task: CodexQueuedTask) -> Result<CodexQueuedTask, String> {
-    codex_task_queue::update_task(task)
+pub async fn codex_queue_update_task(
+    app: AppHandle,
+    task: CodexQueuedTask,
+) -> Result<CodexQueuedTask, String> {
+    let updated = codex_task_queue::edit_task(task).await?;
+    let _ = app.emit("codex://task-queue-updated", ());
+    // The periodic dispatcher will pick up the edited schedule. Do not start a
+    // second dispatcher here or retain the edit guard while dispatching.
+    Ok(updated)
 }
 
 #[tauri::command]

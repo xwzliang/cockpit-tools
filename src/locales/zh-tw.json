@@ -1,4 +1,24 @@
 {
+  "codexQueue": {
+    "editTask": "編輯任務",
+    "editModalTitle": "編輯 Codex 排隊任務",
+    "saveTask": "儲存修改",
+    "saving": "正在儲存修改…",
+    "serverRequired": "請選擇 SSH 伺服器",
+    "invalidQueueTime": "請輸入有效的本地日期和 24 小時時間（HH:mm 或 HH:mm:ss）。",
+    "queueDate": "入隊日期（本地時間）",
+    "queueTime24h": "入隊時間（24 小時制）",
+    "queueTimeHint": "本地時間，24 小時制；日期和時間均留空為立即排隊。",
+    "timeUntilQueue": "距離入隊還有 {{time}}",
+    "queueTimeReached": "已到入隊時間，等待調度",
+    "selectProject": "請選擇專案",
+    "defaultModelPlaceholder": "預設模型，或輸入模型 ID",
+    "noExistingThreads": "此專案下未找到已有會話，請選擇新建會話或其他專案。",
+    "queueEntryTime": "入隊時間",
+    "entersQueueIn": "距離入隊還有 {{duration}}",
+    "queueEntryReached": "已到入隊時間，等待調度",
+    "queueStartAt": "入隊時間（可選，留空為現在）"
+  },
   "autoRestoreCountdown": {
     "remaining": "{{seconds}} 秒後自動恢復",
     "preparing": "正在進行恢復前檢查…",

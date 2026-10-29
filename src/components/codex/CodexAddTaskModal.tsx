@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import {
   X,
   Plus,
+  Save,
   Folder,
   FolderOpen,
   Laptop,
@@ -19,12 +20,15 @@ import {
   listCodexProjects,
   listCodexThreads,
   addCodexQueuedTask,
+  updateCodexQueuedTask,
 } from '../../services/codexTaskQueueService';
 import type {
   CodexProjectItem,
+  CodexQueuedTask,
   CodexThreadSummary,
   CreateQueuedTaskRequest,
 } from '../../types/codexTaskQueue';
+import { formatQueueTimeRemaining, parseLocalQueueDateTime, toLocalQueueDateTime } from '../../utils/codexQueueTime';
 import './CodexTaskQueueSection.css';
 
 interface CodexAddTaskModalProps {
@@ -33,6 +37,7 @@ interface CodexAddTaskModalProps {
   onTaskAdded: () => void;
   defaultCwd?: string;
   defaultThreadId?: string;
+  taskToEdit?: CodexQueuedTask;
 }
 
 const COMMON_MODELS = [
@@ -50,6 +55,7 @@ export function CodexAddTaskModal({
   onTaskAdded,
   defaultCwd,
   defaultThreadId,
+  taskToEdit,
 }: CodexAddTaskModalProps) {
   const { t } = useTranslation();
 
@@ -67,27 +73,58 @@ export function CodexAddTaskModal({
   const [threadMode, setThreadMode] = useState<'new' | 'existing'>(defaultThreadId ? 'existing' : 'new');
   const [selectedThreadId, setSelectedThreadId] = useState<string>(defaultThreadId || '');
 
-  const [queueStartAt, setQueueStartAt] = useState('');
+  const [queueDate, setQueueDate] = useState('');
+  const [queueTime, setQueueTime] = useState('');
+  const [now, setNow] = useState(Date.now());
+  const submitLock = useRef(false);
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
   const [model, setModel] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load SSH servers list
+  // Reset only on opening or selecting another task, never on background queue refresh.
+  const initialValues = useRef({ taskToEdit, defaultCwd, defaultThreadId });
+  initialValues.current = { taskToEdit, defaultCwd, defaultThreadId };
   useEffect(() => {
     if (!isOpen) return;
-    listSshServers()
-      .then((res) => {
-        setSshServers(res.servers);
-        if (res.servers.length > 0 && !selectedServerId) {
-          setSelectedServerId(res.selected_server_id || res.servers[0].id);
-        }
-      })
-      .catch((err) => {
-        console.warn('Failed to load SSH servers:', err);
-      });
-  }, [isOpen, selectedServerId]);
+    const { taskToEdit: task, defaultCwd: initialCwd, defaultThreadId: initialThread } = initialValues.current;
+    setSource(task?.source || 'local');
+    setSelectedServerId(task?.server_id || '');
+    setCwd(task?.cwd || initialCwd || '');
+    setIsCustomCwd(Boolean(task?.cwd || initialCwd));
+    setThreadMode(task?.thread_id || initialThread ? 'existing' : 'new');
+    setSelectedThreadId(task?.thread_id || initialThread || '');
+    setTitle(task?.title || '');
+    setPrompt(task?.prompt || '');
+    setModel(task?.model || '');
+    const schedule = toLocalQueueDateTime(task?.queue_start_at);
+    setQueueDate(schedule.date);
+    setQueueTime(schedule.time);
+    setProjects([]);
+    setThreads([]);
+    setError(null);
+  }, [isOpen, taskToEdit?.id]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    listSshServers().then((res) => {
+      if (cancelled) return;
+      setSshServers(res.servers);
+      setSelectedServerId((current) => current || res.selected_server_id || res.servers[0]?.id || '');
+    }).catch((err) => {
+      if (!cancelled) console.warn('Failed to load SSH servers:', err);
+    });
+    return () => { cancelled = true; };
+  }, [isOpen, taskToEdit?.id]);
 
   // Handler for target source switch (local <-> ssh)
   const handleSourceChange = (newSource: 'local' | 'ssh') => {
@@ -111,70 +148,44 @@ export function CodexAddTaskModal({
     setIsCustomCwd(false);
   };
 
-  // Load projects whenever source or selectedServerId changes
-  const loadProjects = useCallback(async () => {
+  // Lists are suggestions: do not replace saved/custom selections when loading completes.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
     if (source === 'ssh' && !selectedServerId) {
       setProjects([]);
+      setLoadingProjects(false);
       return;
     }
     setLoadingProjects(true);
-    try {
-      const serverId = source === 'ssh' ? selectedServerId : undefined;
-      const list = await listCodexProjects(source, serverId);
-      setProjects(list);
-      setCwd((prevCwd) => {
-        if (prevCwd && list.some((p) => p.cwd === prevCwd)) {
-          return prevCwd;
-        }
-        return list.length > 0 ? list[0].cwd : '';
-      });
-    } catch (err) {
-      console.warn('Failed to list projects:', err);
-      setProjects([]);
-      setCwd('');
-    } finally {
-      setLoadingProjects(false);
-    }
-  }, [source, selectedServerId]);
+    listCodexProjects(source, source === 'ssh' ? selectedServerId : undefined)
+      .then((list) => { if (!cancelled) setProjects(list); })
+      .catch((err) => { if (!cancelled) { console.warn('Failed to list projects:', err); setProjects([]); } })
+      .finally(() => { if (!cancelled) setLoadingProjects(false); });
+    return () => { cancelled = true; };
+  }, [isOpen, source, selectedServerId, taskToEdit?.id]);
 
   useEffect(() => {
     if (!isOpen) return;
-    loadProjects();
-  }, [isOpen, loadProjects]);
-
-  // Load threads whenever cwd changes
-  const loadThreads = useCallback(async () => {
-    if (!cwd) {
-      setThreads([]);
+    let cancelled = false;
+    setThreads([]);
+    if (!cwd || (source === 'ssh' && !selectedServerId)) {
+      setLoadingThreads(false);
       return;
     }
     setLoadingThreads(true);
-    try {
-      const serverId = source === 'ssh' ? selectedServerId : undefined;
-      const list = await listCodexThreads(source, serverId, cwd);
-      setThreads(list);
-      setSelectedThreadId((prevId) => {
-        if (prevId && list.some((t) => t.id === prevId)) {
-          return prevId;
-        }
-        if (defaultThreadId && list.some((t) => t.id === defaultThreadId)) {
-          return defaultThreadId;
-        }
-        return list.length > 0 ? list[0].id : '';
-      });
-    } catch (err) {
-      console.warn('Failed to list threads:', err);
-      setThreads([]);
-      setSelectedThreadId('');
-    } finally {
-      setLoadingThreads(false);
-    }
-  }, [source, selectedServerId, cwd, defaultThreadId]);
+    listCodexThreads(source, source === 'ssh' ? selectedServerId : undefined, cwd)
+      .then((list) => { if (!cancelled) setThreads(list); })
+      .catch((err) => { if (!cancelled) console.warn('Failed to list threads:', err); })
+      .finally(() => { if (!cancelled) setLoadingThreads(false); });
+    return () => { cancelled = true; };
+  }, [isOpen, source, selectedServerId, cwd, taskToEdit?.id]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    loadThreads();
-  }, [isOpen, loadThreads]);
+  const handleCwdChange = (value: string) => {
+    setCwd(value);
+    setSelectedThreadId('');
+    setThreads([]);
+  };
 
   // Pick folder locally
   const handleBrowseFolder = async () => {
@@ -185,7 +196,7 @@ export function CodexAddTaskModal({
         title: t('codexQueue.pickFolder', '选择项目目录'),
       });
       if (selected && typeof selected === 'string') {
-        setCwd(selected);
+        handleCwdChange(selected);
         setIsCustomCwd(true);
       }
     } catch (err) {
@@ -195,6 +206,7 @@ export function CodexAddTaskModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitLock.current) return;
     if (!prompt.trim()) {
       setError(t('codexQueue.promptRequired', '请输入任务提示词'));
       return;
@@ -204,6 +216,22 @@ export function CodexAddTaskModal({
       return;
     }
 
+    if (source === 'ssh' && !selectedServerId) {
+      setError(t('codexQueue.serverRequired', '请选择 SSH 服务器'));
+      return;
+    }
+    let queueStartAt: number | undefined;
+    try {
+      const originalSchedule = toLocalQueueDateTime(taskToEdit?.queue_start_at);
+      // Preserve an unchanged timestamp even during a repeated DST wall-clock hour.
+      queueStartAt = taskToEdit?.queue_start_at != null && queueDate === originalSchedule.date && queueTime === originalSchedule.time
+        ? taskToEdit.queue_start_at
+        : parseLocalQueueDateTime(queueDate, queueTime);
+    } catch {
+      setError(t('codexQueue.invalidQueueTime', '请输入有效的本地日期和 24 小时时间（HH:mm 或 HH:mm:ss）'));
+      return;
+    }
+    submitLock.current = true;
     setSubmitting(true);
     setError(null);
 
@@ -223,7 +251,7 @@ export function CodexAddTaskModal({
         }
         chosenThreadId = selectedThreadId;
         const matchingThread = threads.find((t) => t.id === selectedThreadId);
-        chosenThreadTitle = matchingThread ? matchingThread.title : undefined;
+        chosenThreadTitle = matchingThread?.title || (taskToEdit?.thread_id === selectedThreadId ? taskToEdit.thread_title : undefined);
       }
 
       const matchingThread =
@@ -231,29 +259,34 @@ export function CodexAddTaskModal({
           ? threads.find((t) => t.id === chosenThreadId)
           : undefined;
 
-      // Inherit model from existing thread if default model is chosen
+      // Preserve an edited task's explicit/default model; new tasks retain model inheritance.
       const effectiveModel =
-        model.trim() || (threadMode === 'existing' ? matchingThread?.model : undefined);
+        model.trim() || (!taskToEdit && threadMode === 'existing' ? matchingThread?.model : undefined);
 
       const req: CreateQueuedTaskRequest = {
-        queue_start_at: queueStartAt ? Math.floor(new Date(queueStartAt).getTime() / 1000) : undefined,
+        queue_start_at: queueStartAt,
         title: title.trim() || undefined,
         prompt: prompt.trim(),
         source,
         server_id: source === 'ssh' ? selectedServerId : undefined,
-        server_name: activeServer ? activeServer.name : undefined,
+        server_name: source === 'ssh' ? (activeServer?.name || (taskToEdit?.server_id === selectedServerId ? taskToEdit.server_name : undefined)) : undefined,
         cwd: cwd.trim(),
         thread_id: chosenThreadId,
         thread_title: chosenThreadTitle,
         model: effectiveModel,
       };
 
-      await addCodexQueuedTask(req);
+      if (taskToEdit) {
+        await updateCodexQueuedTask({ ...taskToEdit, ...req, title: title.trim() });
+      } else {
+        await addCodexQueuedTask(req);
+      }
       onTaskAdded();
       onClose();
     } catch (err) {
       setError(String(err));
     } finally {
+      submitLock.current = false;
       setSubmitting(false);
     }
   };
@@ -261,21 +294,29 @@ export function CodexAddTaskModal({
   if (!isOpen) return null;
 
   const selectedThreadObj = threads.find((t) => t.id === selectedThreadId);
+  let schedulePreview: number | undefined;
+  try {
+    const originalSchedule = toLocalQueueDateTime(taskToEdit?.queue_start_at);
+    schedulePreview = taskToEdit?.queue_start_at != null && queueDate === originalSchedule.date && queueTime === originalSchedule.time
+      ? taskToEdit.queue_start_at
+      : parseLocalQueueDateTime(queueDate, queueTime);
+  } catch { /* Validate on save. */ }
+  const closeModal = () => { if (!submitLock.current) onClose(); };
 
   return (
-    <div className="modal-overlay codex-queue-modal-overlay" onClick={onClose}>
+    <div className="modal-overlay codex-queue-modal-overlay" onClick={closeModal}>
       <div
         className="modal-content codex-queue-add-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
           <div className="modal-header-title">
-            <Plus className="header-icon" />
-            <h2>{t('codexQueue.addModalTitle', '添加 Codex 排队任务')}</h2>
+            {taskToEdit ? <Save className="header-icon" /> : <Plus className="header-icon" />}
+            <h2>{taskToEdit ? t('codexQueue.editModalTitle', '编辑 Codex 排队任务') : t('codexQueue.addModalTitle', '添加 Codex 排队任务')}</h2>
           </div>
           <button
             className="modal-close"
-            onClick={onClose}
+            onClick={closeModal}
             aria-label={t('common.close', '关闭')}
             disabled={submitting}
           >
@@ -291,10 +332,22 @@ export function CodexAddTaskModal({
             </div>
           )}
 
+          <fieldset disabled={submitting} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: 'contents' }}>
           {/* 1. Target Environment */}
           <div className="form-group">
             <label>{t('codexQueue.queueStartAt', '开始排队时间（可选，留空为现在）')}</label>
-            <input type="datetime-local" className="form-input" value={queueStartAt} onChange={(e) => setQueueStartAt(e.target.value)} />
+            <div className="queue-schedule-inputs">
+              <input type="date" className="form-input" aria-label={t('codexQueue.queueDate', '排队日期（本地时间）')} value={queueDate} onChange={(e) => setQueueDate(e.target.value)} />
+              <input type="text" className="form-input" aria-label={t('codexQueue.queueTime24h', '排队时间（24 小时制）')} placeholder="HH:mm:ss" value={queueTime} onChange={(e) => setQueueTime(e.target.value)} pattern="[0-9]{2}:[0-9]{2}(:[0-9]{2})?" />
+            </div>
+            <small>{t('codexQueue.queueTimeHint', '本地时间，24 小时制；日期和时间均留空为立即排队。')}</small>
+            {schedulePreview != null && (
+              <div className="queue-schedule-countdown">
+                {schedulePreview * 1000 > now
+                  ? t('codexQueue.timeUntilQueue', '距离进入队列还有 {{time}}', { time: formatQueueTimeRemaining(schedulePreview, now) })
+                  : t('codexQueue.queueTimeReached', '已到排队时间，等待调度')}
+              </div>
+            )}
           </div>
           <div className="form-group">
             <label className="form-label">
@@ -321,7 +374,7 @@ export function CodexAddTaskModal({
 
             {source === 'ssh' && (
               <div className="ssh-server-select-row">
-                {sshServers.length === 0 ? (
+                {sshServers.length === 0 && !selectedServerId ? (
                   <div className="empty-hint">
                     {t(
                       'codexQueue.noSshServers',
@@ -334,6 +387,9 @@ export function CodexAddTaskModal({
                     value={selectedServerId}
                     onChange={(e) => handleServerChange(e.target.value)}
                   >
+                    {selectedServerId && !sshServers.some((server) => server.id === selectedServerId) && (
+                      <option value={selectedServerId}>{taskToEdit?.server_name || selectedServerId}</option>
+                    )}
                     {sshServers.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.name} ({s.username}@{s.host}:{s.port})
@@ -370,9 +426,11 @@ export function CodexAddTaskModal({
                 <select
                   className="form-select"
                   value={cwd}
-                  onChange={(e) => setCwd(e.target.value)}
+                  onChange={(e) => handleCwdChange(e.target.value)}
                   disabled={loadingProjects}
                 >
+                  <option value="">{t('codexQueue.selectProject', '请选择项目目录')}</option>
+                  {cwd && !projects.some((project) => project.cwd === cwd) && <option value={cwd}>{cwd}</option>}
                   {projects.map((p) => (
                     <option key={p.cwd} value={p.cwd}>
                       {p.name} ({p.thread_count} 个会话) - {p.cwd}
@@ -387,7 +445,7 @@ export function CodexAddTaskModal({
                   className="form-input"
                   placeholder="/Users/.../project"
                   value={cwd}
-                  onChange={(e) => setCwd(e.target.value)}
+                  onChange={(e) => handleCwdChange(e.target.value)}
                 />
                 {source === 'local' && (
                   <button
@@ -440,9 +498,9 @@ export function CodexAddTaskModal({
                     <Loader2 className="spinning-icon" />
                     <span>{t('codexQueue.loadingThreads', '正在加载项目会话...')}</span>
                   </div>
-                ) : threads.length === 0 ? (
+                ) : threads.length === 0 && !selectedThreadId ? (
                   <div className="empty-hint">
-                    {t('codexQueue.noExistingThreads', '此项目下未找到已有会话，将作为新会话启动。')}
+                    {t('codexQueue.noExistingThreads', '此项目下未找到已有会话，请选择新建会话或更换项目。')}
                   </div>
                 ) : (
                   <>
@@ -452,6 +510,9 @@ export function CodexAddTaskModal({
                       onChange={(e) => setSelectedThreadId(e.target.value)}
                     >
                       <option value="">{t('codexQueue.selectThreadPlaceholder', '-- 请选择已有会话 --')}</option>
+                      {selectedThreadId && !threads.some((thread) => thread.id === selectedThreadId) && (
+                        <option value={selectedThreadId}>{taskToEdit?.thread_title || selectedThreadId}</option>
+                      )}
                       {threads.map((t) => (
                         <option key={t.id} value={t.id}>
                           {t.has_interrupted_task ? '⚠️ [中断任务] ' : ''}
@@ -513,30 +574,26 @@ export function CodexAddTaskModal({
               <label className="form-label optional">
                 {t('codexQueue.model', '模型 (可选)')}
               </label>
-              <select
-                className="form-select"
+              <input
+                type="text"
+                className="form-input"
+                list="codex-queue-model-suggestions"
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-              >
-                <option value="">
-                  {threadMode === 'existing' && selectedThreadObj?.model
-                    ? `默认模型 (继承会话: ${selectedThreadObj.model})`
-                    : '默认模型 (Default)'}
-                </option>
-                {COMMON_MODELS.filter((m) => m.value !== '').map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+                placeholder={t('codexQueue.defaultModelPlaceholder', '留空使用默认模型，可输入任意模型名称')}
+              />
+              <datalist id="codex-queue-model-suggestions">
+                {COMMON_MODELS.filter((item) => item.value).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </datalist>
             </div>
           </div>
 
+          </fieldset>
           <div className="modal-footer">
             <button
               type="button"
               className="btn-secondary"
-              onClick={onClose}
+              onClick={closeModal}
               disabled={submitting}
             >
               {t('common.cancel', '取消')}
@@ -549,12 +606,12 @@ export function CodexAddTaskModal({
               {submitting ? (
                 <>
                   <Loader2 className="spinning-icon" />
-                  <span>{t('codexQueue.adding', '正在加入队列...')}</span>
+                  <span>{taskToEdit ? t('codexQueue.saving', '正在保存...') : t('codexQueue.adding', '正在加入队列...')}</span>
                 </>
               ) : (
                 <>
-                  <Plus className="btn-icon" />
-                  <span>{t('codexQueue.addToQueue', '加入任务队列')}</span>
+                  {taskToEdit ? <Save className="btn-icon" /> : <Plus className="btn-icon" />}
+                  <span>{taskToEdit ? t('codexQueue.saveTask', '保存任务') : t('codexQueue.addToQueue', '加入任务队列')}</span>
                 </>
               )}
             </button>
