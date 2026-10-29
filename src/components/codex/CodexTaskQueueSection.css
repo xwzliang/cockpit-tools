@@ -1301,3 +1301,24 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Queue schedules deliberately avoid locale-controlled AM/PM time inputs. */
+.queue-schedule-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.65fr);
+  gap: 10px;
+}
+.queue-entry-countdown,
+.queue-entry-time,
+.queue-schedule-countdown {
+  font-variant-numeric: tabular-nums;
+}
+.card-action-btn.edit-btn:hover {
+  color: var(--accent-color, #60a5fa);
+  background: rgba(59, 130, 246, 0.12);
+}
+.queue-schedule-countdown {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary, #94a3b8);
+}

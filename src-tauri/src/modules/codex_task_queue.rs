@@ -135,7 +135,8 @@ pub struct ThreadExecutionStatus {
 }
 
 static QUEUE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-static DISPATCH_RUNNING: OnceLock<Mutex<bool>> = OnceLock::new();
+// Serializes user edits with the entire async dispatcher snapshot/launch/save cycle.
+static DISPATCH_EDIT_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 static RECENTLY_RESUMED_THREADS: OnceLock<Mutex<std::collections::HashMap<String, i64>>> = OnceLock::new();
 
 fn recently_resumed_lock() -> &'static Mutex<std::collections::HashMap<String, i64>> {
@@ -176,8 +177,8 @@ fn queue_lock() -> &'static Mutex<()> {
     QUEUE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn dispatch_running_flag() -> &'static Mutex<bool> {
-    DISPATCH_RUNNING.get_or_init(|| Mutex::new(false))
+fn dispatch_edit_lock() -> &'static tokio::sync::Mutex<()> {
+    DISPATCH_EDIT_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn queue_file_path() -> Result<PathBuf, String> {
@@ -329,7 +330,95 @@ pub fn add_task(req: CreateQueuedTaskRequest) -> Result<CodexQueuedTask, String>
     Ok(task)
 }
 
-pub fn update_task(task: CodexQueuedTask) -> Result<CodexQueuedTask, String> {
+fn normalized_optional(value: Option<String>) -> Option<String> {
+    value.map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+}
+
+/// Edit only configuration fields. Never trust status or execution metadata from
+/// a modal snapshot: the dispatcher may have started the task since it opened.
+pub async fn edit_task(task: CodexQueuedTask) -> Result<CodexQueuedTask, String> {
+    let _dispatch_guard = dispatch_edit_lock().lock().await;
+    edit_task_fields(task)
+}
+
+fn edit_task_fields(task: CodexQueuedTask) -> Result<CodexQueuedTask, String> {
+    let prompt = task.prompt.trim().to_string();
+    let cwd = task.cwd.trim().to_string();
+    if prompt.is_empty() {
+        return Err("任务提示词不能为空".to_string());
+    }
+    if cwd.is_empty() {
+        return Err("项目路径不能为空".to_string());
+    }
+    if task.source != "local" && task.source != "ssh" {
+        return Err("无效的任务执行环境".to_string());
+    }
+    if let Some(timestamp) = task.queue_start_at {
+        // Match the UI's four-digit local date range and reject invalid timestamps.
+        // A time in the past is valid: it makes the task eligible immediately.
+        if timestamp < 0 || timestamp > 253402300799 {
+            return Err("无效的开始排队时间".to_string());
+        }
+    }
+    let server_id = if task.source == "ssh" {
+        Some(normalized_optional(task.server_id)
+            .ok_or_else(|| "请选择 SSH 服务器".to_string())?)
+    } else {
+        None
+    };
+    let thread_id = normalized_optional(task.thread_id);
+    let _guard = queue_lock().lock().unwrap();
+    let mut tasks = load_tasks();
+    let existing = tasks.iter_mut().find(|existing| existing.id == task.id)
+        .ok_or_else(|| format!("未找到任务: {}", task.id))?;
+    if !matches!(existing.status, TaskStatus::Pending | TaskStatus::WaitingInterrupted) {
+        return Err("任务已开始执行或已结束，无法修改。请刷新队列。".to_string());
+    }
+    let target_changed = existing.source != task.source
+        || existing.server_id != server_id
+        || existing.cwd != cwd
+        || existing.thread_id != thread_id;
+    existing.title = if task.title.trim().is_empty() {
+        if prompt.chars().count() > 40 {
+            format!("{}...", prompt.chars().take(40).collect::<String>())
+        } else {
+            prompt.clone()
+        }
+    } else {
+        task.title.trim().to_string()
+    };
+    existing.prompt = prompt;
+    existing.cwd = cwd;
+    existing.source = task.source;
+    existing.server_id = server_id;
+    existing.server_name = if existing.source == "ssh" {
+        normalized_optional(task.server_name)
+    } else {
+        None
+    };
+    existing.thread_id = thread_id;
+    existing.thread_title = if existing.thread_id.is_some() {
+        normalized_optional(task.thread_title)
+    } else {
+        None
+    };
+    existing.model = normalized_optional(task.model);
+    existing.queue_start_at = task.queue_start_at;
+    if target_changed {
+        // Waiting/error information belongs to the old target. A previously
+        // assigned thread must not silently override the newly selected target.
+        existing.status = TaskStatus::Pending;
+        existing.error_message = None;
+        existing.assigned_thread_id = None;
+    }
+    let updated = existing.clone();
+    save_tasks(&tasks)?;
+    logger::log_info(&format!("[CodexTaskQueue] 更新排队任务: id={}", updated.id));
+    Ok(updated)
+}
+
+#[cfg(test)]
+fn update_task(task: CodexQueuedTask) -> Result<CodexQueuedTask, String> {
     let _guard = queue_lock().lock().unwrap();
     let mut tasks = load_tasks();
     if let Some(idx) = tasks.iter().position(|t| t.id == task.id) {
@@ -1416,23 +1505,12 @@ async fn launch_task(task: &mut CodexQueuedTask) -> Result<(), String> {
 }
 
 pub async fn run_queue_dispatcher_step(app: Option<&AppHandle>) -> Result<(), String> {
-    // Ensure only one dispatcher step executes at a time
-    {
-        let mut flag = dispatch_running_flag().lock().unwrap();
-        if *flag {
-            return Ok(());
-        }
-        *flag = true;
-    }
-
-    let result = run_queue_dispatcher_step_inner(app).await;
-
-    {
-        let mut flag = dispatch_running_flag().lock().unwrap();
-        *flag = false;
-    }
-
-    result
+    // Skip overlapping scheduler ticks, but let queued edits acquire this lock
+    // before a later tick. The Tokio guard is Send and may cross awaits.
+    let Ok(_dispatch_guard) = dispatch_edit_lock().try_lock() else {
+        return Ok(());
+    };
+    run_queue_dispatcher_step_inner(app).await
 }
 
 async fn run_queue_dispatcher_step_inner(app: Option<&AppHandle>) -> Result<(), String> {

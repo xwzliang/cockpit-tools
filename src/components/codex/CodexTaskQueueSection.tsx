@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import {
   ListOrdered,
+  Pencil,
   Plus,
   Play,
   Pause,
@@ -40,6 +41,7 @@ import type {
   TaskStatus,
 } from '../../types/codexTaskQueue';
 import { CodexAddTaskModal } from './CodexAddTaskModal';
+import { formatQueueEntryTime24h, formatQueueTimeRemaining } from '../../utils/codexQueueTime';
 import './CodexTaskQueueSection.css';
 
 interface CodexTaskQueueSectionProps {
@@ -64,6 +66,13 @@ export function CodexTaskQueueSection({
     return saved === 'true';
   });
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<CodexQueuedTask | undefined>();
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'queue' | 'finished'>('queue');
 
@@ -631,7 +640,21 @@ export function CodexTaskQueueSection({
                               )}
                             </span>
 
-                            {task.queue_start_at && <span className="meta-chip">{t('codexQueue.queueStartAt', '开始排队时间')}: {new Date(task.queue_start_at * 1000).toLocaleString()}</span>}
+                            {task.queue_start_at != null && (
+                              <span className="meta-chip queue-entry-time">
+                                <Clock className="chip-icon" />
+                                {t('codexQueue.queueEntryTime', '入队时间')}: {formatQueueEntryTime24h(task.queue_start_at)}
+                              </span>
+                            )}
+                            {isPending && (
+                              <span className="meta-chip queue-entry-countdown">
+                                {task.queue_start_at != null && task.queue_start_at * 1000 > now
+                                  ? t('codexQueue.entersQueueIn', '距离入队还有 {{duration}}', {
+                                      duration: formatQueueTimeRemaining(task.queue_start_at, now),
+                                    })
+                                  : t('codexQueue.queueEntryReached', '已到入队时间，等待调度')}
+                              </span>
+                            )}
                             {/* Project cwd */}
                             <span className="meta-chip cwd" title={task.cwd}>
                               <Folder className="chip-icon" />
@@ -729,6 +752,17 @@ export function CodexTaskQueueSection({
 
                       {/* Right side actions */}
                       <div className="card-right-actions">
+                        {isPending && (
+                          <button
+                            type="button"
+                            className="card-action-btn edit-btn"
+                            onClick={() => setEditingTask(task)}
+                            title={t('codexQueue.editTask', '编辑任务')}
+                            aria-label={t('codexQueue.editTask', '编辑任务')}
+                          >
+                            <Pencil />
+                          </button>
+                        )}
                         {task.status === 'failed' && (
                           <button
                             type="button"
@@ -757,6 +791,16 @@ export function CodexTaskQueueSection({
         </div>
       )}
 
+      {/* Mount a fresh editor per task so switching tasks cannot keep stale form state. */}
+      {editingTask && (
+        <CodexAddTaskModal
+          key={editingTask.id}
+          isOpen
+          taskToEdit={editingTask}
+          onClose={() => setEditingTask(undefined)}
+          onTaskAdded={() => { setActiveTab('queue'); void loadData(true); }}
+        />
+      )}
       {/* Add Task Modal */}
       <CodexAddTaskModal
         isOpen={isAddModalOpen}
