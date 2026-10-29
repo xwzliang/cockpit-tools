@@ -1,4 +1,4 @@
-use crate::modules::{codex_auto_resume, logger, ssh_server};
+use crate::modules::{codex_auto_resume, codex_session_display::SessionDisplayContext, logger, ssh_server};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Utc;
 use rusqlite::OpenFlags;
@@ -263,6 +263,54 @@ pub fn get_queue_state() -> Result<CodexQueueState, String> {
     let tasks = load_tasks();
     let config = load_queue_config();
     Ok(CodexQueueState { tasks, config })
+}
+
+/// Refresh display labels without changing task prompts or user-defined titles.
+/// Read remote names from their own host; stale labels remain usable offline.
+pub async fn get_queue_state_with_titles() -> Result<CodexQueueState, String> {
+    let mut state = get_queue_state()?;
+    if let Some(home) = std::env::var_os("CODEX_HOME").map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
+    {
+        let display = SessionDisplayContext::load(&home);
+        for task in state.tasks.iter_mut().filter(|task| task.source == "local") {
+            if let Some(id) = task.thread_id.as_ref().or(task.assigned_thread_id.as_ref()) {
+                if let Some(title) = display.resolve_title(id, task.thread_title.as_deref()) {
+                    task.thread_title = Some(title);
+                }
+            }
+        }
+    }
+    let servers = ssh_server::list_servers().map(|list| list.servers).unwrap_or_default();
+    let requests = servers.into_iter().filter_map(|server| {
+        let ids: HashSet<String> = state.tasks.iter()
+            .filter(|task| task.source == "ssh" && task.server_id.as_deref() == Some(server.id.as_str()))
+            .filter_map(|task| task.thread_id.as_ref().or(task.assigned_thread_id.as_ref()).cloned())
+            .collect();
+        if ids.is_empty() { return None; }
+        Some(async move {
+            let payload = BASE64_STANDARD.encode(serde_json::json!({
+                "action": "thread_titles", "thread_ids": ids, "codex_home": server.codex_home,
+            }).to_string());
+            let result = ssh_server::run_ssh(&server, 15, &["python3", "-", &payload],
+                Some(PYTHON_SSH_DISCOVERY.to_string())).await;
+            let titles = result.ok().and_then(|output| {
+                let json = output.split("__CODEX_QUEUE_JSON_START__").nth(1)?
+                    .split("__CODEX_QUEUE_JSON_END__").next()?;
+                let value: serde_json::Value = serde_json::from_str(json.trim()).ok()?;
+                serde_json::from_value::<std::collections::HashMap<String, String>>(value.get("titles")?.clone()).ok()
+            }).unwrap_or_default();
+            (server.id, titles)
+        })
+    });
+    for (server_id, titles) in futures::future::join_all(requests).await {
+        for task in state.tasks.iter_mut().filter(|task| task.source == "ssh" && task.server_id.as_deref() == Some(server_id.as_str())) {
+            if let Some(title) = task.thread_id.as_ref().or(task.assigned_thread_id.as_ref()).and_then(|id| titles.get(id)) {
+                task.thread_title = Some(title.clone());
+            }
+        }
+    }
+    Ok(state)
 }
 
 pub fn get_local_thread_model(thread_id: &str) -> Option<String> {
@@ -666,7 +714,7 @@ async fn list_local_threads(cwd: Option<&str>) -> Result<Vec<CodexThreadSummary>
         let rows = stmt
             .query_map([target_cwd], |row| {
                 let id: String = row.get(0)?;
-                let title: String = row.get(1)?;
+                let title: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
                 let model: Option<String> = row.get(2)?;
                 let cwd: Option<String> = row.get(3)?;
                 let updated_at: i64 = row.get(4)?;
@@ -689,7 +737,7 @@ async fn list_local_threads(cwd: Option<&str>) -> Result<Vec<CodexThreadSummary>
         let rows = stmt
             .query_map([], |row| {
                 let id: String = row.get(0)?;
-                let title: String = row.get(1)?;
+                let title: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
                 let model: Option<String> = row.get(2)?;
                 let cwd: Option<String> = row.get(3)?;
                 let updated_at: i64 = row.get(4)?;
@@ -710,6 +758,12 @@ async fn list_local_threads(cwd: Option<&str>) -> Result<Vec<CodexThreadSummary>
         }
     }
 
+    let display = SessionDisplayContext::load(&codex_home);
+    for thread in &mut threads {
+        if let Some(title) = display.resolve_title(&thread.id, Some(&thread.title)) {
+            thread.title = title;
+        }
+    }
     Ok(threads)
 }
 
@@ -741,7 +795,9 @@ def handle():
         
     conn = sqlite3.connect(f"file:{state_db}?mode=ro", uri=True)
     cur = conn.cursor()
-    
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(threads)")}
+    title_expr = "COALESCE(NULLIF(TRIM(name), ''), title)" if "name" in columns else "title"
+
     if action == "list_projects":
         cur.execute("""
             SELECT cwd, MAX(updated_at) as last_active, COUNT(id) as cnt
@@ -770,8 +826,8 @@ def handle():
     elif action == "list_threads":
         cwd = params.get("cwd")
         if cwd:
-            cur.execute("""
-                SELECT id, title, model, cwd, updated_at
+            cur.execute(f"""
+                SELECT id, {title_expr}, model, cwd, updated_at
                 FROM threads
                 WHERE archived = 0 AND cwd = ?
                   AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation'))
@@ -781,8 +837,8 @@ def handle():
                 LIMIT 50
             """, (cwd,))
         else:
-            cur.execute("""
-                SELECT id, title, model, cwd, updated_at
+            cur.execute(f"""
+                SELECT id, {title_expr}, model, cwd, updated_at
                 FROM threads
                 WHERE archived = 0
                   AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation'))
@@ -805,6 +861,15 @@ def handle():
         conn.close()
         return {"threads": threads}
         
+    elif action == "thread_titles":
+        titles = {}
+        for tid in params.get("thread_ids", []):
+            row = conn.execute(f"SELECT {title_expr} FROM threads WHERE id = ?", (tid,)).fetchone()
+            if row and row[0] and row[0].strip():
+                titles[tid] = row[0].strip()
+        conn.close()
+        return {"titles": titles}
+
     elif action == "check_thread_statuses":
         t_ids = params.get("thread_ids", [])
         hist_db = codex_home / "thread_history_1.sqlite"

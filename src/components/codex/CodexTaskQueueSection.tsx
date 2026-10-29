@@ -626,8 +626,8 @@ export function CodexTaskQueueSection({
                         <div className="task-header-row">
                           <div className="title-and-status">
                             {renderStatusBadge(task.status)}
-                            <h4 className="task-title" onClick={() => toggleExpandTask(task.id)}>
-                              {task.title}
+                            <h4 className="task-title" title={task.title} onClick={() => toggleExpandTask(task.id)}>
+                              {task.thread_title || task.title}
                             </h4>
                           </div>
 
@@ -670,7 +670,7 @@ export function CodexTaskQueueSection({
                             </span>
 
                             {/* Thread */}
-                            <span className="meta-chip thread" title={task.thread_id ? `会话: ${task.thread_id}` : '新建独立会话'}>
+                            <span className="meta-chip thread" title={task.thread_id ? `${task.thread_title || '会话'} (${task.thread_id})` : '新建独立会话'}>
                               {task.thread_id ? (
                                 <>
                                   <MessageSquare className="chip-icon" />

@@ -4,8 +4,8 @@ use crate::modules::codex_task_queue::{
 };
 
 #[tauri::command]
-pub fn codex_queue_get_state() -> Result<CodexQueueState, String> {
-    codex_task_queue::get_queue_state()
+pub async fn codex_queue_get_state() -> Result<CodexQueueState, String> {
+    codex_task_queue::get_queue_state_with_titles().await
 }
 
 #[tauri::command]

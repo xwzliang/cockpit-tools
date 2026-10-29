@@ -400,6 +400,7 @@ def detect_interrupted_tasks():
             conn_s = sqlite3.connect(f"file:{state_db}?mode=ro", uri=True)
             cur_g = conn_g.cursor()
             cur_s = conn_s.cursor()
+            title_expr = "COALESCE(NULLIF(TRIM(name), ''), title)" if any(row[1] == "name" for row in conn_s.execute("PRAGMA table_info(threads)")) else "title"
             
             cur_g.execute("SELECT thread_id, goal_id, objective, status, updated_at_ms FROM thread_goals WHERE status IN ('usage_limited', 'blocked')")
             for row in cur_g.fetchall():
@@ -407,7 +408,7 @@ def detect_interrupted_tasks():
                 if is_thread_in_progress(hist_db, thread_id):
                     continue
                 
-                cur_s.execute("SELECT cwd, title, model, rollout_path FROM threads WHERE id = ?", (thread_id,))
+                cur_s.execute(f"SELECT cwd, {title_expr}, model, rollout_path FROM threads WHERE id = ?", (thread_id,))
                 s_row = cur_s.fetchone()
                 cwd = s_row[0] if s_row else None
                 title = s_row[1] if s_row and s_row[1] else objective
@@ -447,8 +448,9 @@ def detect_interrupted_tasks():
         try:
             conn_s = sqlite3.connect(f"file:{state_db}?mode=ro", uri=True)
             cur_s = conn_s.cursor()
-            cur_s.execute("""
-                SELECT id, cwd, title, model, rollout_path, updated_at
+            title_expr = "COALESCE(NULLIF(TRIM(name), ''), title)" if any(row[1] == "name" for row in conn_s.execute("PRAGMA table_info(threads)")) else "title"
+            cur_s.execute(f"""
+                SELECT id, cwd, {title_expr}, model, rollout_path, updated_at
                 FROM threads
                 WHERE archived = 0
                   AND (thread_source IS NULL OR thread_source NOT IN ('guardian_review', 'subagent', 'automation'))
@@ -1257,6 +1259,12 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
         }
     }
 
+    let display = crate::modules::codex_session_display::SessionDisplayContext::load(&codex_home);
+    for task in &mut tasks {
+        if let Some(title) = display.resolve_title(&task.thread_id, Some(&task.title)) {
+            task.title = title;
+        }
+    }
     tasks
 }
 
