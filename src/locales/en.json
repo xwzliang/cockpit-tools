@@ -1,4 +1,10 @@
 {
+  "autoRestoreCountdown": {
+    "remaining": "Auto restore in {{seconds}}s",
+    "preparing": "Checking before automatic restore…",
+    "hint": "Uncheck “Auto restore” for a task to stop its pending restore.",
+    "saveFailed": "Could not save automatic restore setting: {{error}}"
+  },
   "pelican": {
     "results": "Test results",
     "usageTokens": "{{tokens}} tok",

@@ -773,6 +773,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
+            modules::auto_restore_countdown::get_pending_auto_restores,
             commands::codex_pelican::codex_pelican_start,
             commands::codex_pelican::codex_pelican_retry,
             commands::codex_pelican::codex_pelican_active,

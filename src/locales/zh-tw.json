@@ -1,4 +1,10 @@
 {
+  "autoRestoreCountdown": {
+    "remaining": "{{seconds}} 秒後自動恢復",
+    "preparing": "正在進行恢復前檢查…",
+    "hint": "取消勾選任務的「自動恢復」可停止本次待執行恢復。",
+    "saveFailed": "無法儲存自動恢復設定：{{error}}"
+  },
   "pelican": {
     "results": "測試結果",
     "usageTokens": "{{tokens}} Token",

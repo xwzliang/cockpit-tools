@@ -109,14 +109,20 @@ pub fn save_excluded_task_ids(ids: &HashSet<String>) -> Result<(), String> {
     crate::modules::atomic_write::write_string_atomic(&path, &content)
 }
 
+static EXCLUSION_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn set_task_excluded(task_id: &str, excluded: bool) -> Result<(), String> {
+    let _guard = EXCLUSION_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut ids = load_excluded_task_ids();
     if excluded {
         ids.insert(task_id.to_string());
     } else {
         ids.remove(task_id);
     }
-    save_excluded_task_ids(&ids)
+    save_excluded_task_ids(&ids)?;
+    // Invalidate even a rapid uncheck/recheck so it cannot reuse an old deadline.
+    crate::modules::auto_restore_countdown::cancel("antigravity", task_id);
+    Ok(())
 }
 
 const DISMISSED_TASKS_FILE: &str = "antigravity_auto_resume_dismissed_tasks.json";
@@ -155,7 +161,9 @@ pub fn delete_interrupted_task(task_id: &str) -> Result<(), String> {
             ids.insert(raw_id.to_string());
         }
     }
-    save_dismissed_task_ids(&ids)
+    save_dismissed_task_ids(&ids)?;
+    crate::modules::auto_restore_countdown::cancel("antigravity", task_id);
+    Ok(())
 }
 
 pub fn load_resumed_task_records() -> Vec<ResumedTaskRecord> {
@@ -1006,12 +1014,31 @@ async fn confirm_current_recovery_quota() -> Result<(), String> {
     validate_fresh_recovery_quota(&quota, account.quota_error.is_some())
 }
 
+fn auto_restore_allowed(task: &InterruptedAntigravityTask) -> bool {
+    let cfg = config::get_user_config();
+    if !cfg.antigravity_auto_resume_interrupted_tasks_enabled
+        || (task.source != "local" && !cfg.antigravity_auto_resume_sync_ssh) { return false; }
+    let excluded = load_excluded_task_ids();
+    let dismissed = load_dismissed_task_ids();
+    !excluded.contains(&task.id) && !excluded.contains(&task.thread_id)
+        && !dismissed.contains(&task.id) && !dismissed.contains(&task.thread_id)
+}
+
 pub async fn resume_task(
     task: &InterruptedAntigravityTask,
     custom_prompt: Option<String>,
     trigger_type: &str,
 ) -> Result<ResumeTaskResult, String> {
+    if trigger_type != "auto" {
+        crate::modules::auto_restore_countdown::cancel("antigravity", &task.id);
+    }
+    let countdown_token = crate::modules::auto_restore_countdown::token("antigravity", &task.id);
     confirm_current_recovery_quota().await?;
+    if trigger_type == "auto" && (!auto_restore_allowed(task)
+        || countdown_token.is_none()
+        || crate::modules::auto_restore_countdown::token("antigravity", &task.id) != countdown_token) {
+        return Err("Automatic restore cancelled".to_string());
+    }
     let prompt = custom_prompt.unwrap_or_else(|| {
         if let Some(agent_id) = &task.background_agent_id {
             format!(
@@ -1051,6 +1078,10 @@ pub async fn resume_task(
                 return Err(sync.error.unwrap_or_else(|| "Remote Antigravity auth sync failed".to_string()));
             }
         }
+        if trigger_type == "auto" && (!auto_restore_allowed(task)
+            || crate::modules::auto_restore_countdown::token("antigravity", &task.id) != countdown_token) {
+            return Err("Automatic restore cancelled".to_string());
+        }
         resume_remote_task(server, &task.thread_id, &prompt).await
     } else {
         Err(format!("未知任务来源: {}", task.source))
@@ -1087,13 +1118,26 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
     }
 
     let tasks = detect_all_interrupted_tasks().await;
-    let now_ts = Utc::now().timestamp();
 
     for task in tasks {
         if task.is_excluded {
             continue;
         }
 
+        // Do not advertise a countdown for tasks still in their retry cooldown.
+        if resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner())
+            .get(&task.id).is_some_and(|last| Utc::now().timestamp() - last < 1800) {
+            continue;
+        }
+        let Some(countdown) = crate::modules::auto_restore_countdown::wait(
+            "antigravity", &task.id, &task.title, || auto_restore_allowed(&task),
+        ).await else { continue; };
+        // Re-detect after the minute: completed or newly active tasks must not restart.
+        let still_interrupted = detect_all_interrupted_tasks().await.into_iter()
+            .any(|current| current.id == task.id && current.updated_at == task.updated_at
+                && !current.is_excluded);
+        if !countdown.valid() || !auto_restore_allowed(&task) || !still_interrupted { continue; }
+        let now_ts = Utc::now().timestamp();
         // Deduplication check: avoid triggering repeatedly within 30 minutes
         let should_trigger = {
             let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -1154,6 +1198,10 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
                 let _ = app.emit("antigravity://task-auto-resumed", &task);
             }
             Err(err) => {
+                if err == "Automatic restore cancelled" {
+                    resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner()).remove(&task.id);
+                    continue;
+                }
                 if err == RECOVERY_QUOTA_EXHAUSTED {
                     // Do not consume the recovery cooldown before switching;
                     // the switch callback needs to recover this same task.
@@ -1178,82 +1226,9 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
 }
 
 pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
-    let cfg = config::get_user_config();
-    if !cfg.antigravity_auto_resume_interrupted_tasks_enabled {
-        logger::log_info("[AntigravityAutoResume] 切号后检查：自动恢复功能未开启，跳过");
-        return;
-    }
-
-    logger::log_info("[AntigravityAutoResume] Checking interrupted tasks after account switch; each recovery requires fresh quota");
-    let tasks = detect_all_interrupted_tasks().await;
-    let now_ts = Utc::now().timestamp();
-
-    for task in tasks {
-        if task.is_excluded {
-            continue;
-        }
-
-        {
-            let mut cache = resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner());
-            cache.insert(task.id.clone(), now_ts);
-        }
-
-        logger::log_info(&format!(
-            "[AntigravityAutoResume] 切号后立即恢复任务: id={}, title={}",
-            task.id, task.title
-        ));
-
-        let res = resume_task(&task, None, "auto").await;
-        match res {
-            Ok(result) => {
-                logger::log_info(&format!(
-                    "[AntigravityAutoResume] 切号后自动恢复成功: {} - {}",
-                    task.id, result.message
-                ));
-
-                let title = "Antigravity 任务已在切号后自动恢复";
-                let display_title = if task.title.len() > 50 {
-                    format!("{}...", &task.title[..47])
-                } else {
-                    task.title.clone()
-                };
-                let body = format!("账号切换后已立即恢复执行：{}", display_title);
-
-                #[cfg(target_os = "macos")]
-                {
-                    let bundle_identifier = app.config().identifier.clone();
-                    let mut notification = mac_notification_sys::Notification::new();
-                    notification.title(title).message(&body);
-                    let _ = mac_notification_sys::set_application(&bundle_identifier);
-                    let _ = notification.send();
-                }
-
-                #[cfg(not(target_os = "macos"))]
-                {
-                    use tauri_plugin_notification::NotificationExt;
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title(title)
-                        .body(&body)
-                        .show();
-                }
-
-                let _ = app.emit("antigravity://task-auto-resumed", &task);
-            }
-            Err(err) => {
-                resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner()).remove(&task.id);
-                logger::log_warn(&format!(
-                    "[AntigravityAutoResume] 切号后自动恢复任务失败: {} - {}",
-                    task.id, err
-                ));
-                if err == RECOVERY_QUOTA_EXHAUSTED {
-                    return;
-                }
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
+    // Account-switch callbacks must use the same cancellable grace period and
+    // deduplication as periodic restoration, never bypass it with an immediate launch.
+    check_and_auto_resume(app).await;
 }
 
 #[cfg(test)]

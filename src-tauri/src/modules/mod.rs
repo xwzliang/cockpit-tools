@@ -1,3 +1,4 @@
+pub mod auto_restore_countdown;
 pub mod account;
 pub mod account_index_repair;
 pub mod announcement;

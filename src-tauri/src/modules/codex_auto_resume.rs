@@ -193,14 +193,20 @@ pub fn save_excluded_task_ids(ids: &std::collections::HashSet<String>) -> Result
     crate::modules::atomic_write::write_string_atomic(&path, &content)
 }
 
+static EXCLUSION_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
 pub fn set_task_excluded(task_id: &str, excluded: bool) -> Result<(), String> {
+    let _guard = EXCLUSION_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut ids = load_excluded_task_ids();
     if excluded {
         ids.insert(task_id.to_string());
     } else {
         ids.remove(task_id);
     }
-    save_excluded_task_ids(&ids)
+    save_excluded_task_ids(&ids)?;
+    // Invalidate even a rapid uncheck/recheck so it cannot reuse an old deadline.
+    crate::modules::auto_restore_countdown::cancel("codex", task_id);
+    Ok(())
 }
 
 const DISMISSED_TASKS_FILE: &str = "codex_auto_resume_dismissed_tasks.json";
@@ -238,7 +244,9 @@ pub fn delete_interrupted_task(task_id: &str) -> Result<(), String> {
             ids.insert(raw_id.to_string());
         }
     }
-    save_dismissed_task_ids(&ids)
+    save_dismissed_task_ids(&ids)?;
+    crate::modules::auto_restore_countdown::cancel("codex", task_id);
+    Ok(())
 }
 
 const PYTHON_ACTIVITY_PROBE: &str = include_str!("codex_activity_probe.py");
@@ -1358,15 +1366,35 @@ async fn refresh_current_recovery_quota() -> Result<bool, String> {
     Ok(quota.hourly_percentage > 0 && quota.weekly_percentage > 0)
 }
 
+fn auto_restore_allowed(task: &InterruptedCodexTask) -> bool {
+    let cfg = config::get_user_config();
+    if !cfg.codex_auto_resume_interrupted_tasks_enabled
+        || (task.source != "local" && !cfg.codex_auto_resume_sync_ssh) { return false; }
+    let excluded = load_excluded_task_ids();
+    let dismissed = load_dismissed_task_ids();
+    !excluded.contains(&task.id) && !excluded.contains(&task.thread_id)
+        && !dismissed.contains(&task.id) && !dismissed.contains(&task.thread_id)
+}
+
 pub async fn resume_task(
     task: &InterruptedCodexTask,
     custom_prompt: Option<String>,
     trigger_type: &str,
 ) -> Result<ResumeTaskResult, String> {
+    if trigger_type != "auto" {
+        crate::modules::auto_restore_countdown::cancel("codex", &task.id);
+    }
+    let countdown_token = crate::modules::auto_restore_countdown::token("codex", &task.id);
     if !refresh_current_recovery_quota().await? {
         return Err("Current account quota is exhausted; waiting for quota or account switch".to_string());
     }
-    let result = resume_task_internal(task, custom_prompt).await;
+    if trigger_type == "auto" && (!auto_restore_allowed(task)
+        || countdown_token.is_none()
+        || crate::modules::auto_restore_countdown::token("codex", &task.id) != countdown_token) {
+        return Err("Automatic restore cancelled".to_string());
+    }
+    let result = resume_task_internal(task, custom_prompt,
+        if trigger_type == "auto" { countdown_token } else { None }).await;
     let now_ts = Utc::now().timestamp();
     match &result {
         Ok(res) => {
@@ -1412,6 +1440,7 @@ pub async fn resume_task(
 async fn resume_task_internal(
     task: &InterruptedCodexTask,
     custom_prompt: Option<String>,
+    countdown_token: Option<u64>,
 ) -> Result<ResumeTaskResult, String> {
     let prompt = custom_prompt.unwrap_or_else(|| {
         if task.is_goal {
@@ -1498,6 +1527,10 @@ async fn resume_task_internal(
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
 
+        if countdown_token.is_some() && (!auto_restore_allowed(task)
+            || crate::modules::auto_restore_countdown::token("codex", &task.id) != countdown_token) {
+            return Err("Automatic restore cancelled".to_string());
+        }
         cmd.spawn()
             .map_err(|e| format!("启动本地恢复进程失败: {}", e))?;
 
@@ -1538,6 +1571,10 @@ async fn resume_task_internal(
             }
         }
 
+        if countdown_token.is_some() && (!auto_restore_allowed(task)
+            || crate::modules::auto_restore_countdown::token("codex", &task.id) != countdown_token) {
+            return Err("Automatic restore cancelled".to_string());
+        }
         let output = ssh_server::run_ssh(
             &server,
             25,
@@ -2033,9 +2070,11 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
         let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
         for task in tasks {
             if !task.is_excluded {
-                retries.entry(task.id.clone()).or_insert(RecoveryRetry {
-                    task, attempts: 0, next_attempt_at: 0, first_attempt_at: 0,
-                });
+                retries.entry(task.id.clone())
+                    .and_modify(|retry| retry.task = task.clone())
+                    .or_insert(RecoveryRetry {
+                        task, attempts: 0, next_attempt_at: 0, first_attempt_at: 0,
+                    });
             }
         }
         save_retry_state(&retries);
@@ -2069,6 +2108,17 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
             RecoveryProgress::Retry => {}
         }
         if recovery_requires_intervention(task.error_message.as_deref()) { continue; }
+        let Some(countdown) = crate::modules::auto_restore_countdown::wait(
+            "codex", &task.id, &task.title, || auto_restore_allowed(&task),
+        ).await else { continue; };
+        // The task may have been manually resumed or completed during the grace period.
+        if !countdown.valid() || recovery_progress(&retry).await != RecoveryProgress::Retry {
+            continue;
+        }
+        if detect_all_interrupted_tasks().await.iter().any(|current|
+            current.id == task.id && current.updated_at != task.updated_at) {
+            continue;
+        }
         // Re-check immediately before each launch; detection's pool-wide quota is
         // insufficient when the active account has run out during this batch.
         match refresh_current_recovery_quota().await {
@@ -2083,6 +2133,7 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
                 return;
             }
         }
+        if !countdown.valid() || !auto_restore_allowed(&task) { continue; }
         {
             let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
             if let Some(state) = retries.get_mut(&task.id) {
@@ -2097,6 +2148,13 @@ async fn resume_available_interrupted_tasks(app: &AppHandle) {
         ));
 
         let res = resume_task(&task, None, "auto").await;
+        if matches!(&res, Err(error) if error == "Automatic restore cancelled") {
+            // A user cancellation is not a failed launch and must not consume retries.
+            let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());
+            retries.insert(task.id.clone(), retry.clone());
+            save_retry_state(&retries);
+            continue;
+        }
         // Measure the delay from the end of the attempt, including slow failures.
         {
             let mut retries = retry_state().lock().unwrap_or_else(|e| e.into_inner());

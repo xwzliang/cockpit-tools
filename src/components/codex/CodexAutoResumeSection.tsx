@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -30,6 +30,8 @@ import {
   type InterruptedCodexTask,
   type ResumedTaskRecord,
 } from '../../services/codexAutoResumeService';
+import { usePendingAutoRestores } from '../../hooks/usePendingAutoRestores';
+import '../common/AutoRestoreCountdown.css';
 import './CodexAutoResumeSection.css';
 
 interface CodexAutoResumeSectionProps {
@@ -42,6 +44,11 @@ export function CodexAutoResumeSection({
   onTaskResumed,
 }: CodexAutoResumeSectionProps) {
   const { t } = useTranslation();
+
+  const pendingRestores = usePendingAutoRestores('codex');
+  const savingExclusions = useRef(new Set<string>());
+  const exclusionRevision = useRef(0);
+  const [savingTaskIds, setSavingTaskIds] = useState<Set<string>>(new Set());
 
   const [loading, setLoading] = useState(false);
   const [interruptedTasks, setInterruptedTasks] = useState<InterruptedCodexTask[]>([]);
@@ -74,6 +81,7 @@ export function CodexAutoResumeSection({
       setLoading(true);
       setError(null);
     }
+    const startedExclusionRevision = exclusionRevision.current;
     try {
       const [interrupted, resumed] = await Promise.all([
         detectInterruptedCodexTasks().catch((err) => {
@@ -85,7 +93,11 @@ export function CodexAutoResumeSection({
           return [] as ResumedTaskRecord[];
         }),
       ]);
-      setInterruptedTasks(interrupted);
+      setInterruptedTasks((previous) => {
+        if (exclusionRevision.current === startedExclusionRevision && savingExclusions.current.size === 0) return interrupted;
+        const previousById = new Map(previous.map((task) => [task.id, task]));
+        return interrupted.map((task) => ({ ...task, is_excluded: previousById.get(task.id)?.is_excluded ?? task.is_excluded }));
+      });
       setResumedTasks(resumed);
       setLastUpdated(new Date());
 
@@ -103,6 +115,13 @@ export function CodexAutoResumeSection({
       }
     }
   }, []);
+
+  // Newly queued tasks must be visible with their existing checkbox before the
+  // normal one-minute scan interval expires. Timer ticks do not trigger scans.
+  const pendingTaskIds = pendingRestores.map((pending) => pending.task_id).sort().join('|');
+  useEffect(() => {
+    if (pendingTaskIds) void loadData(true);
+  }, [pendingTaskIds, loadData]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -175,16 +194,26 @@ export function CodexAutoResumeSection({
   };
 
   const handleToggleTaskExcluded = async (taskId: string, excluded: boolean) => {
+    if (savingExclusions.current.has(taskId)) return;
+    savingExclusions.current.add(taskId);
+    setSavingTaskIds(new Set(savingExclusions.current));
+    exclusionRevision.current += 1;
+    setError(null);
     setInterruptedTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, is_excluded: excluded } : t)),
+      prev.map((task) => (task.id === taskId ? { ...task, is_excluded: excluded } : task)),
     );
     try {
       await setCodexTaskExcluded(taskId, excluded);
     } catch (err) {
       console.error('Failed to update task exclusion:', err);
+      setError(t('autoRestoreCountdown.saveFailed', 'Could not save automatic restore setting: {{error}}', { error: String(err) }));
       setInterruptedTasks((prev) =>
-        prev.map((t) => (t.id === taskId ? { ...t, is_excluded: !excluded } : t)),
+        prev.map((task) => (task.id === taskId ? { ...task, is_excluded: !excluded } : task)),
       );
+    } finally {
+      exclusionRevision.current += 1;
+      savingExclusions.current.delete(taskId);
+      setSavingTaskIds(new Set(savingExclusions.current));
     }
   };
 
@@ -459,6 +488,25 @@ export function CodexAutoResumeSection({
         </div>
       </div>
 
+      {pendingRestores.length > 0 && (
+        <div className="auto-restore-countdown-summary">
+          <div className="auto-restore-countdown-hint">
+            <Clock size={14} />
+            <span>{t('autoRestoreCountdown.hint', 'Uncheck “Auto restore” for a task to stop its pending restore.')}</span>
+          </div>
+          {pendingRestores.map((pending) => (
+            <div key={pending.task_id} className="auto-restore-countdown-summary-row">
+              <span className="auto-restore-countdown-title" title={pending.title}>{pending.title}</span>
+              <span className="auto-restore-countdown-time">
+                {pending.secondsRemaining > 0
+                  ? t('autoRestoreCountdown.remaining', 'Auto restore in {{seconds}}s', { seconds: pending.secondsRemaining })
+                  : t('autoRestoreCountdown.preparing', 'Checking before automatic restore…')}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Settings bar for quick inline management */}
       {!effectiveCollapsed && (
         <div className="codex-auto-resume-settings-bar">
@@ -541,7 +589,7 @@ export function CodexAutoResumeSection({
       )}
 
       {/* Body content */}
-      {!isCollapsed && (
+      {!effectiveCollapsed && (
         <div className="codex-auto-resume-body">
           {loading && interruptedTasks.length === 0 && resumedTasks.length === 0 ? (
             <div key="loading" className="codex-auto-resume-empty">
@@ -569,6 +617,7 @@ export function CodexAutoResumeSection({
                 const countdown = !task.can_resume ? formatCountdown(task.resets_at) : null;
                 const resetTimeStr = formatResetTime(task.resets_at);
                 const isResuming = resumingTaskId === task.id;
+                const pendingRestore = pendingRestores.find((pending) => pending.task_id === task.id);
 
                 return (
                   <div key={`${task.id}-${index}`} className="codex-task-card">
@@ -608,6 +657,15 @@ export function CodexAutoResumeSection({
                           </span>
                         )}
 
+                        {pendingRestore && (
+                          <span className="auto-restore-countdown-tag" title={t('autoRestoreCountdown.hint', 'Uncheck “Auto restore” for a task to stop its pending restore.')}>
+                            <Clock size={12} />
+                            {pendingRestore.secondsRemaining > 0
+                              ? t('autoRestoreCountdown.remaining', 'Auto restore in {{seconds}}s', { seconds: pendingRestore.secondsRemaining })
+                              : t('autoRestoreCountdown.preparing', 'Checking before automatic restore…')}
+                          </span>
+                        )}
+
                         {task.is_excluded && (
                           <span className="codex-task-tag codex-task-tag--excluded">
                             {t('codex.autoResume.taskExcludedBadge', '已排除自动恢复')}
@@ -615,7 +673,7 @@ export function CodexAutoResumeSection({
                         )}
                       </div>
 
-                      {autoResumeEnabled && (
+                      {(autoResumeEnabled || pendingRestore) && (
                         <label
                           className={`codex-task-auto-resume-checkbox ${task.is_excluded ? 'is-excluded' : 'is-included'}`}
                           title={
@@ -628,6 +686,7 @@ export function CodexAutoResumeSection({
                           <input
                             type="checkbox"
                             checked={!task.is_excluded}
+                            disabled={savingTaskIds.has(task.id)}
                             onChange={() => void handleToggleTaskExcluded(task.id, !task.is_excluded)}
                           />
                           <span>{t('codex.autoResume.taskCheckboxLabel', '自动恢复')}</span>

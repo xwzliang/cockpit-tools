@@ -2479,6 +2479,13 @@ where
 }
 
 fn finish_user_config_update(config: &UserConfig) {
+    // Cancel immediately, including an off/on toggle faster than the countdown poll.
+    if !config.codex_auto_resume_interrupted_tasks_enabled {
+        crate::modules::auto_restore_countdown::cancel_provider("codex");
+    }
+    if !config.antigravity_auto_resume_interrupted_tasks_enabled {
+        crate::modules::auto_restore_countdown::cancel_provider("antigravity");
+    }
     sync_global_proxy_env(config);
 
     crate::modules::logger::log_info(&format!(
