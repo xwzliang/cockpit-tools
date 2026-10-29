@@ -1111,7 +1111,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedCodexTask> {
                 });
                 if let Ok(rows) = rows {
                     for item in rows.flatten() {
-                        let (thread_id, goal_id, objective, g_status, updated_at_ms) = item;
+                        let (thread_id, goal_id, objective, _g_status, updated_at_ms) = item;
                         seen_threads.insert(thread_id.clone());
 
                         if is_thread_in_progress(&hist_db, &thread_id) {

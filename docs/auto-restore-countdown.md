@@ -11,3 +11,7 @@ Implementation rules:
 - Retain the existing per-task checkbox; do not add redundant pause/resume/cancel buttons.
 
 This change was prepared without running tests or builds at the user's request. Native behavior should be checked on the user's Mac.
+
+## Account-switch async dependency
+
+The shared restore loop must not call automatic account switching. Account switching spawns the post-switch restore callback; having that callback await a loop which calls switching again creates a recursive opaque-future `Send` dependency and prevents compilation. The restore-only loop reports quota exhaustion to its caller. Only the periodic scheduler wrapper initiates another switch; the post-switch callback defers to the next scheduler pass. Keep both entry points on the same countdown/cancellation loop without introducing this dependency cycle.

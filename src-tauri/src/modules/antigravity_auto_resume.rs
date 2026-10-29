@@ -1112,9 +1112,25 @@ pub async fn resume_task(
 }
 
 pub async fn check_and_auto_resume(app: &AppHandle) {
+    if resume_available_interrupted_tasks(app).await {
+        // Only the periodic scheduler may initiate switching. Keeping this out
+        // of the shared restore loop breaks the switch -> spawned restore ->
+        // switch future cycle, rather than hiding it with a Send workaround.
+        logger::log_info("[AntigravityAutoResume] Fresh quota is exhausted; switching account before recovery");
+        match crate::modules::account::run_auto_switch_if_needed().await {
+            Ok(Some(_)) => {},
+            Ok(None) => logger::log_info("[AntigravityAutoResume] No eligible automatic switch; recovery deferred"),
+            Err(error) => logger::log_warn(&format!("[AntigravityAutoResume] Account switch failed; recovery deferred: {error}")),
+        }
+    }
+}
+
+// Returns true when fresh quota is exhausted. This restore-only future must
+// never initiate account switching: switch completion spawns this same loop.
+async fn resume_available_interrupted_tasks(app: &AppHandle) -> bool {
     let cfg = config::get_user_config();
     if !cfg.antigravity_auto_resume_interrupted_tasks_enabled {
-        return;
+        return false;
     }
 
     let tasks = detect_all_interrupted_tasks().await;
@@ -1206,13 +1222,7 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
                     // Do not consume the recovery cooldown before switching;
                     // the switch callback needs to recover this same task.
                     resumed_tasks_cache().lock().unwrap_or_else(|e| e.into_inner()).remove(&task.id);
-                    logger::log_info("[AntigravityAutoResume] Fresh quota is exhausted; switching account before recovery");
-                    match crate::modules::account::run_auto_switch_if_needed().await {
-                        Ok(Some(_)) => {},
-                        Ok(None) => logger::log_info("[AntigravityAutoResume] No eligible automatic switch; recovery deferred"),
-                        Err(error) => logger::log_warn(&format!("[AntigravityAutoResume] Account switch failed; recovery deferred: {error}")),
-                    }
-                    return;
+                    return true;
                 }
                 logger::log_warn(&format!(
                     "[AntigravityAutoResume] 自动恢复任务失败: {} - {}",
@@ -1223,12 +1233,15 @@ pub async fn check_and_auto_resume(app: &AppHandle) {
             }
         }
     }
+    false
 }
 
 pub async fn resume_checked_tasks_on_account_switch(app: &AppHandle) {
     // Account-switch callbacks must use the same cancellable grace period and
     // deduplication as periodic restoration, never bypass it with an immediate launch.
-    check_and_auto_resume(app).await;
+    if resume_available_interrupted_tasks(app).await {
+        logger::log_info("[AntigravityAutoResume] Quota exhausted after account switch; waiting for the next scheduler pass");
+    }
 }
 
 #[cfg(test)]

@@ -2585,6 +2585,7 @@ pub async fn codex_wakeup_run_enabled_tasks(
 /// 启动时根据配置自动恢复可见模型目录与代理接管状态
 #[tauri::command]
 pub async fn restore_codex_active_takeover_if_enabled(app: AppHandle) -> Result<bool, String> {
+    let _ = app; // Preserve the injected Tauri handle argument without an unused-variable warning.
     let cfg = config::get_user_config();
     if !cfg.codex_auto_restore_takeover_on_launch {
         return Ok(false);
