@@ -280,7 +280,7 @@ export function CodexTaskQueueSection({
         return (
           <span className="queue-status-badge steered">
             <MessageSquare className="badge-icon" />
-            <span>{t('codexQueue.statusSteered', '已发送至当前轮次')}</span>
+            <span>{t('codexQueue.statusSteered', '当前轮次已接受')}</span>
           </span>
         );
       case 'completed':
@@ -723,8 +723,10 @@ export function CodexTaskQueueSection({
                         </div>
 
                         {task.status === 'steered' && (
-                          <p className="task-steered-notice" title={task.assigned_turn_id}>
-                            {t('codexQueue.steeredNotice', '指令已被执行中的轮次接收；这不表示该轮次已完成。')}
+                          <p className="task-steered-notice" title={task.steer_message_id ?? task.assigned_turn_id}>
+                            {task.steer_message_id
+                              ? t('codexQueue.steerRecordedNotice', '已确认指令写入会话历史。若 Codex 未显示消息，请重新打开会话。')
+                              : t('codexQueue.steeredNotice', '当前轮次已接受指令，但尚未确认写入会话历史。请检查会话后再考虑重试，以免重复发送。')}
                           </p>
                         )}
 

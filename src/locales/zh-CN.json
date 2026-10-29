@@ -2437,8 +2437,9 @@
     "deliverySteerBadge": "Steer 执行中轮次",
     "deliveryWaitBadge": "等待完成",
     "threadInterruptedSteerNotice": "中断任务需先恢复，恢复后可向执行中的轮次追加指令。",
-    "statusSteered": "已发送至当前轮次",
-    "steeredNotice": "指令已被执行中的轮次接收；这不表示该轮次已完成。",
+    "statusSteered": "当前轮次已接受",
+    "steerRecordedNotice": "已确认指令写入会话历史。若 Codex 未显示消息，请重新打开会话。",
+    "steeredNotice": "当前轮次已接受指令，但尚未确认写入会话历史。请检查会话后再考虑重试，以免重复发送。",
     "acceptedAt": "接收于",
     "completedAt": "完成于"
   },

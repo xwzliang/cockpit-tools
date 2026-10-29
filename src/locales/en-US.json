@@ -2399,8 +2399,9 @@
     "deliverySteerBadge": "Steer active turn",
     "deliveryWaitBadge": "Wait for completion",
     "threadInterruptedSteerNotice": "The interrupted task must be restored first. Once restored, input can be steered into its active turn.",
-    "statusSteered": "Sent to active turn",
-    "steeredNotice": "The active turn accepted this input. This does not mean that turn has completed.",
+    "statusSteered": "Accepted by active turn",
+    "steerRecordedNotice": "Confirmed in conversation history. If Codex does not display the message, reopen the chat.",
+    "steeredNotice": "The active turn accepted the input, but its message has not been confirmed in conversation history. Check the thread before retrying to avoid duplicates.",
     "acceptedAt": "Accepted at",
     "completedAt": "Completed at"
   },

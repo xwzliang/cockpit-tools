@@ -27,6 +27,7 @@ export interface CodexQueuedTask {
   output_preview?: string;
   assigned_thread_id?: string;
   assigned_turn_id?: string;
+  steer_message_id?: string;
   pid?: number;
   created_at: number;
   started_at?: number;

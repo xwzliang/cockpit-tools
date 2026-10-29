@@ -78,6 +78,8 @@ pub struct CodexQueuedTask {
     #[serde(default)]
     pub assigned_turn_id: Option<String>,
     #[serde(default)]
+    pub steer_message_id: Option<String>,
+    #[serde(default)]
     pub pid: Option<u32>,
     pub created_at: i64,
     #[serde(default)]
@@ -332,6 +334,7 @@ pub fn add_task(req: CreateQueuedTaskRequest) -> Result<CodexQueuedTask, String>
         output_preview: None,
         assigned_thread_id: None,
         assigned_turn_id: None,
+        steer_message_id: None,
         pid: None,
         created_at: now,
         queue_start_at: req.queue_start_at,
@@ -431,6 +434,7 @@ fn edit_task_fields(task: CodexQueuedTask) -> Result<CodexQueuedTask, String> {
         existing.error_message = None;
         existing.assigned_thread_id = None;
         existing.assigned_turn_id = None;
+        existing.steer_message_id = None;
     }
     let updated = existing.clone();
     save_tasks(&tasks)?;
@@ -495,6 +499,7 @@ pub fn retry_task(task_id: &str) -> Result<(), String> {
         task.completed_at = None;
         task.pid = None;
         task.assigned_turn_id = None;
+        task.steer_message_id = None;
         save_tasks(&tasks)?;
         logger::log_info(&format!("[CodexTaskQueue] 重试任务: id={}", task_id));
         Ok(())
@@ -1013,7 +1018,7 @@ async fn query_ssh_thread_statuses(
 // ----------------- Execution & Dispatcher Engine -----------------
 
 const PYTHON_QUEUE_EXECUTE: &str = r#"
-import socket, json, os, time, sqlite3, base64, sys, subprocess
+import socket, json, os, time, sqlite3, base64, sys, subprocess, uuid
 from pathlib import Path
 
 def execute():
@@ -1135,9 +1140,9 @@ def execute():
                     fragments.extend(payload)
                     if final: return fragments.decode('utf-8')
 
-            def rpc(request_id, method, params):
+            def rpc(request_id, method, params, timeout=8):
                 send_ws(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}))
-                deadline = time.monotonic() + 8
+                deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     s.settimeout(max(0.1, deadline - time.monotonic()))
                     reply = json.loads(read_ws_msg())
@@ -1170,18 +1175,52 @@ def execute():
                     return {"success": False, "deferred": True}
                 turn_id = active_turns[-1].get("id")
                 if not turn_id: raise RuntimeError("Active turn ID missing")
+                # Give the desktop a correlation ID, just like its own composer.
+                client_message_id = str(uuid.uuid4())
+                previous_ids = {item.get("id") for turn in thread.get("turns", [])
+                                for item in turn.get("items", [])}
                 # No model/cwd overrides: steering keeps the active turn's config.
                 # Never fall back/retry after a steer send: a transport timeout
                 # can mean it was accepted and its response was lost.
-                reply = rpc(11, "turn/steer", {"threadId": thread_id, "expectedTurnId": turn_id, "input": [{"type": "text", "text": prompt}]})
+                reply = rpc(11, "turn/steer", {"threadId": thread_id, "expectedTurnId": turn_id, "clientUserMessageId": client_message_id, "input": [{"type": "text", "text": prompt}]})
                 if "error" in reply:
                     s.close()
                     return {"success": False, "message": "Steer 未被接受（轮次可能已结束或 Codex 不支持此操作）；请检查会话后重试或选择等待完成: " + str(reply["error"])}
                 accepted_turn = reply.get("result", {}).get("turnId")
                 if accepted_turn != turn_id:
                     raise RuntimeError("Steer acknowledgement missing/mismatched; verify thread before retry")
+                # An acknowledgement only queues the input. Wait briefly for a
+                # new user item in this turn; never resend an accepted request.
+                message_id = None
+                deadline = time.monotonic() + 6
+                request_id = 12
+                try:
+                    while time.monotonic() < deadline and not message_id:
+                        recorded = rpc(request_id, "thread/read", {"threadId": thread_id, "includeTurns": True},
+                                       timeout=max(0.1, deadline - time.monotonic()))
+                        request_id += 1
+                        if "error" in recorded:
+                            break
+                        for turn in recorded.get("result", {}).get("thread", {}).get("turns", []):
+                            if turn.get("id") != accepted_turn:
+                                continue
+                            for item in turn.get("items", []):
+                                if item.get("type") != "userMessage" or not item.get("id") or item["id"] in previous_ids:
+                                    continue
+                                content = item.get("content", [])
+                                matches_text = (len(content) == 1 and content[0].get("type") == "text"
+                                                and content[0].get("text") == prompt)
+                                if item.get("clientId") == client_message_id or (not item.get("clientId") and matches_text):
+                                    message_id = item["id"]
+                                    break
+                        if not message_id:
+                            time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+                except Exception:
+                    # Delivery remains accepted, but recording is unconfirmed.
+                    pass
                 s.close()
                 return {"success": True, "mode": "steer", "thread_id": thread_id, "turn_id": accepted_turn,
+                        "steer_message_id": message_id,
                         "message": "消息已发送至当前轮次（不代表该轮次已完成）"}
 
             active_thread_id = thread_id
@@ -1435,6 +1474,7 @@ async fn launch_task(task: &mut CodexQueuedTask, steer_only: bool) -> Result<boo
                                 task.pid = Some(pid as u32);
                             }
                             task.assigned_turn_id = val.get("turn_id").and_then(|v| v.as_str()).map(str::to_owned);
+                            task.steer_message_id = val.get("steer_message_id").and_then(|v| v.as_str()).map(str::to_owned);
                             task.status = if steer_only { TaskStatus::Steered } else { TaskStatus::Running };
                             task.started_at = Some(Utc::now().timestamp());
                             task.error_message = None;
@@ -1548,6 +1588,7 @@ async fn launch_task(task: &mut CodexQueuedTask, steer_only: bool) -> Result<boo
                         task.pid = Some(pid as u32);
                     }
                     task.assigned_turn_id = val.get("turn_id").and_then(|v| v.as_str()).map(str::to_owned);
+                    task.steer_message_id = val.get("steer_message_id").and_then(|v| v.as_str()).map(str::to_owned);
                     task.status = if steer_only { TaskStatus::Steered } else { TaskStatus::Running };
                     task.started_at = Some(Utc::now().timestamp());
                     task.error_message = None;
