@@ -1017,23 +1017,27 @@ pub async fn sync_current_account_to_server(
     Ok(sync_account_to_server(server, &account).await)
 }
 
-pub async fn sync_selected_server_after_codex_switch(
+fn codex_sync_targets(store: &SshServerStore) -> Vec<SshServer> {
+    store.servers.iter().filter(|server| server.sync_on_codex_switch).cloned().collect()
+}
+
+pub async fn sync_enabled_servers_after_codex_switch(
     account: &CodexAccount,
-) -> Option<SshCodexSyncResult> {
+) -> Vec<SshCodexSyncResult> {
     let store = match load_store() {
         Ok(store) => store,
         Err(error) => {
             logger::log_warn(&format!("[Codex SSH] 读取 SSH 服务器配置失败: {}", error));
-            return None;
+            return Vec::new();
         }
     };
-    let Some(server) = selected_server_from_store(&store) else {
-        return None;
-    };
-    if !server.sync_on_codex_switch {
-        return None;
+    let mut results = Vec::new();
+    // Persist each result sequentially: concurrent store read/modify/write cycles
+    // could overwrite another host's status. A failed host does not stop others.
+    for server in codex_sync_targets(&store) {
+        results.push(sync_account_to_server(server, account).await);
     }
-    Some(sync_account_to_server(server, account).await)
+    results
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1646,6 +1650,26 @@ mod tests {
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    #[test]
+    fn codex_sync_includes_all_enabled_hosts_regardless_of_selection() {
+        let mut first = valid_server();
+        first.id = "server".into();
+        let mut second = first.clone();
+        second.id = "daily".into();
+        let mut disabled = first.clone();
+        disabled.id = "disabled".into();
+        disabled.sync_on_codex_switch = false;
+        disabled.sync_on_antigravity_switch = true;
+        let mut store = SshServerStore { selected_server_id: Some("daily".into()),
+            servers: vec![first, second, disabled], ..Default::default() };
+        for selected in [Some("daily".into()), Some("disabled".into()), None] {
+            store.selected_server_id = selected;
+            assert_eq!(codex_sync_targets(&store).iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), vec!["server", "daily"]);
+        }
+        for server in &mut store.servers { server.sync_on_codex_switch = false; }
+        assert!(codex_sync_targets(&store).is_empty());
     }
 
     #[test]

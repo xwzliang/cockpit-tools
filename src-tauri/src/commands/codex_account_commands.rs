@@ -1313,8 +1313,8 @@ pub async fn switch_codex_account(
     apply_codex_switch_auth_projections(&account, &user_config);
 
     // Full #1404: optional auto SSH sync after switch (hash-verified remote projection + app-server reload).
-    if let Some(ssh_sync) =
-        crate::modules::ssh_server::sync_selected_server_after_codex_switch(&account).await
+    for ssh_sync in
+        crate::modules::ssh_server::sync_enabled_servers_after_codex_switch(&account).await
     {
         if ssh_sync.verified {
             logger::log_info(&format!(

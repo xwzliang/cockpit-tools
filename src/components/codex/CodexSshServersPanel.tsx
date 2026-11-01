@@ -171,7 +171,7 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
     try {
       const draft = draftFromForm(form);
       await upsertServer(draft);
-      // 开启任一切号同步时自动选中该服务器，设置里的开关会点亮
+      // Keep the edited host as the default for manual sync; Codex auto-sync targets all enabled hosts.
       if (platform === "codex" ? draft.sync_on_codex_switch : draft.sync_on_antigravity_switch) {
         const list = useSshServerStore.getState().servers;
         const matched =
@@ -257,7 +257,7 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
             <p className="codex-ssh-panel__subtitle">
               {t(
                 'codex.ssh.subtitle',
-                '选中的服务器会在 Codex 切号后接收当前账号鉴权包。',
+                '所有开启自动同步的主机都会在 Codex 切号后接收当前账号鉴权包。',
               )}
             </p>
           </div>

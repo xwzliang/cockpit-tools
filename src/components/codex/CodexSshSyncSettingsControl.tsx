@@ -12,16 +12,15 @@ interface CodexSshSyncSettingsControlProps {
 
 /**
  * Codex 设置中的「切号同步 SSH」开关 + 配置入口。
- * 打开开关会弹出配置弹框；关闭开关会取消选中服务器（停止切号自动同步）。
+ * 打开开关会弹出配置弹框；关闭开关会关闭所有主机的 Codex 自动同步。
  */
 export function CodexSshSyncSettingsControl({
   variant = 'settings',
 }: CodexSshSyncSettingsControlProps) {
   const { t } = useTranslation();
   const servers = useSshServerStore((s) => s.servers);
-  const selectedServerId = useSshServerStore((s) => s.selectedServerId);
   const fetchServers = useSshServerStore((s) => s.fetchServers);
-  const selectServer = useSshServerStore((s) => s.selectServer);
+  const upsertServer = useSshServerStore((s) => s.upsertServer);
   const [modalOpen, setModalOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -29,14 +28,11 @@ export function CodexSshSyncSettingsControl({
     void fetchServers();
   }, [fetchServers]);
 
-  const selectedServer = useMemo(
-    () => servers.find((server) => server.id === selectedServerId) ?? null,
-    [servers, selectedServerId],
+  const enabledServers = useMemo(
+    () => servers.filter((server) => server.sync_on_codex_switch),
+    [servers],
   );
-
-  const enabled = Boolean(
-    selectedServer && selectedServer.sync_on_codex_switch,
-  );
+  const enabled = enabledServers.length > 0;
 
   const openModal = useCallback(() => setModalOpen(true), []);
   const closeModal = useCallback(() => setModalOpen(false), []);
@@ -49,8 +45,10 @@ export function CodexSshSyncSettingsControl({
     }
     setBusy(true);
     try {
-      // 关闭：取消选中，后端切号同步不会再推到任何 SSH 主机
-      await selectServer(null);
+      // Preserve host configuration and the separate Antigravity sync setting.
+      for (const server of enabledServers) {
+        await upsertServer({ ...server, sync_on_codex_switch: false });
+      }
     } catch (error) {
       console.warn('[Codex SSH] disable sync failed:', error);
     } finally {
@@ -58,16 +56,11 @@ export function CodexSshSyncSettingsControl({
     }
   };
 
-  const hintText = enabled && selectedServer
-    ? t('codex.ssh.syncSwitchActive', '已启用 · {{name}}（{{user}}@{{host}}）', {
-        name: selectedServer.name,
-        user: selectedServer.username,
-        host: selectedServer.host,
+  const hintText = enabled
+    ? t('codex.ssh.syncSwitchActiveHosts', '已启用 · {{names}}', {
+        names: enabledServers.map((server) => server.name).join(', '),
       })
-    : t(
-        'codex.ssh.syncSwitchDesc',
-        '开启后配置 SSH 主机；Codex 切号时把当前账号同步到远端。',
-      );
+    : t('codex.ssh.syncSwitchDesc', 'Codex 切号时同步到所有开启自动同步的 SSH 主机。');
 
   if (variant === 'quick') {
     return (

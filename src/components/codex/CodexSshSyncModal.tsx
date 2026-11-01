@@ -41,7 +41,7 @@ export function CodexSshSyncModal({ open, onClose, platform = "codex" }: CodexSs
               <p className="codex-ssh-sync-modal__subtitle">
                 {t(
                   'codex.ssh.modalHint',
-                  '添加并选中一台 SSH 服务器，开启「切号后自动同步」后，Codex 切号会把当前账号同步到远端。',
+                  '为需要同步的每台 SSH 主机开启「切号后自动同步」。所有开启的主机都会接收当前账号。',
                 )}
               </p>
             </div>
