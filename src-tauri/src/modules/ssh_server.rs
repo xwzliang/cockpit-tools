@@ -23,7 +23,7 @@ const CONNECTION_TIMEOUT_SECS: u64 = 12;
 const TEST_COMMAND_TIMEOUT_SECS: u64 = 20;
 /// 读写同步脚本墙钟超时
 const SYNC_TIMEOUT_SECS: u64 = 45;
-/// 远端 app-server reload 墙钟超时（略放宽；失败不阻断已校验写入）
+/// 远端 app-server reload 墙钟超时；失败必须反映在同步结果中。
 const APP_SERVER_RELOAD_TIMEOUT_SECS: u64 = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -782,9 +782,11 @@ if codex_bin:
     except Exception as e:
         daemon_status = f"error:{e}"
 
-print(f"linux-codex-restarted: terminated={len(terminated)}, daemon={daemon_status}")
+success = daemon_status in ("restarted", "started")
+print(f"linux-codex-restarted: terminated={len(terminated)}, daemon={daemon_status}", file=sys.stdout if success else sys.stderr)
+sys.exit(0 if success else 1)
 PY_EOF
-    exit 0
+    exit $?
   fi
 
   # Linux 但无 python3 时的纯 shell 回退
@@ -834,7 +836,10 @@ PY_EOF
     fi
   fi
   printf 'linux-codex-restarted: terminated=shell, daemon=%s\n' "$daemon_status"
-  exit 0
+  case "$daemon_status" in
+    restarted|started) exit 0 ;;
+    *) printf 'Codex daemon restart failed: %s\n' "$daemon_status" >&2; exit 1 ;;
+  esac
 fi
 
 # 3) 非 Linux 平台（如 macOS/BSD）优先 daemon restart，限制 5s
@@ -874,6 +879,12 @@ exit 0
 "#
 }
 
+fn successful_codex_reload_status(line: &str) -> bool {
+    matches!(line, "daemon-restarted" | "app-server-terminated" | "no-app-server" | "desktop-relaunched")
+        || (line.starts_with("linux-codex-restarted: ")
+            && matches!(line.rsplit_once(", daemon=").map(|(_, status)| status), Some("restarted" | "started")))
+}
+
 async fn reload_remote_codex_app_server(server: &SshServer) -> Result<(), String> {
     let output = run_ssh(
         server,
@@ -884,12 +895,7 @@ async fn reload_remote_codex_app_server(server: &SshServer) -> Result<(), String
     .await
     .map_err(|e| format!("ssh_remote_app_server_reload_failed: {}", sanitize_error(e)))?;
 
-    let recognized_status = output.lines().map(str::trim).find(|line| {
-        matches!(
-            *line,
-            "daemon-restarted" | "app-server-terminated" | "no-app-server" | "desktop-relaunched"
-        ) || line.starts_with("linux-codex-restarted")
-    });
+    let recognized_status = output.lines().map(str::trim).find(|line| successful_codex_reload_status(line));
 
     if let Some(status) = recognized_status {
         logger::log_info(&format!(
@@ -946,13 +952,10 @@ async fn sync_account_to_server(server: SshServer, account: &CodexAccount) -> Ss
                 .map_err(|e| format!("codex_bundle_failed: {}", sanitize_error(e)))?;
         // 鉴权落盘 + 校验是硬条件
         upload_and_verify_bundle(&server, &bundle).await?;
-        // reload 是软条件：远端没 codex / 进程卡死 / 超时不应把已成功写入判失败
-        if let Err(reload_error) = reload_remote_codex_app_server(&server).await {
-            logger::log_warn(&format!(
-                "[Codex SSH] 远端 app-server 刷新失败（鉴权已写入）: server_id={}, error={}",
-                server.id, reload_error
-            ));
-        }
+        // A verified file upload alone does not mean the running daemon adopted it.
+        reload_remote_codex_app_server(&server).await.map_err(|error| {
+            format!("鉴权已写入并校验，但远端 Codex 重启失败: {}", error)
+        })?;
         Ok::<_, String>(bundle)
     }
     .await;
@@ -1856,6 +1859,20 @@ compile(writers[0], 'generated-keychain-writer.py', 'exec')
         assert!(script.contains("os_platform="));
         assert!(script.contains("linux-codex-restarted"));
         assert!(script.contains("codex-auth-account-monitor"));
+    }
+
+    #[test]
+    fn codex_reload_requires_successful_daemon_result() {
+        for status in ["daemon-restarted", "desktop-relaunched",
+            "linux-codex-restarted: terminated=2, daemon=restarted",
+            "linux-codex-restarted: terminated=shell, daemon=started"] {
+            assert!(successful_codex_reload_status(status), "{status}");
+        }
+        for status in ["", "linux-codex-restarted", "linux-codex-restarted: terminated=2, daemon=failed",
+            "linux-codex-restarted: terminated=2, daemon=none",
+            "linux-codex-restarted: terminated=2, daemon=error:timeout"] {
+            assert!(!successful_codex_reload_status(status), "{status}");
+        }
     }
 
     #[test]
