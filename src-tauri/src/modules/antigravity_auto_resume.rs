@@ -357,7 +357,7 @@ def check_task():
                     err = last_step.get('error') or ''
                     content = str(last_step.get('content', ''))
                     
-                    if st == 'ERROR' or err or (last_step.get('type') == 'SYSTEM_MESSAGE' and 'RESOURCE_EXHAUSTED' in content):
+                    if st == 'ERROR' or err or last_step.get('type') == 'ERROR_MESSAGE' or (last_step.get('type') == 'SYSTEM_MESSAGE' and 'RESOURCE_EXHAUSTED' in content):
                         is_interrupted = True
                         error_message = err or content[:250]
                         combined = (str(err) + ' ' + content).lower()
@@ -379,7 +379,13 @@ def check_task():
                     # Resume the owning conversation so it can inspect/recover its worker.
                     cid = parent_id
                     title, preview, ws_uris = parent.get('title'), parent.get('preview'), parent.get('workspace_uris')
-                if (is_interrupted and is_quota_limited) or restart_interrupted:
+                # ERROR_MESSAGE can be DONE even when the API request failed.
+                # While RUNNING these are retries, and killed means an explicit stop.
+                error_interrupted = (
+                    is_interrupted and not killed
+                    and not not_fully_idle and c_status == 'CASCADE_RUN_STATUS_IDLE'
+                )
+                if (is_interrupted and is_quota_limited) or error_interrupted or restart_interrupted:
                     if cid in seen_ids:
                         continue
                     seen_ids.add(cid)
@@ -405,7 +411,7 @@ def check_task():
                         'objective': preview,
                         'cwd': cwd,
                         'model': None,
-                        'status': 'blocked' if restart_interrupted else 'usage_limited',
+                        'status': 'usage_limited' if is_quota_limited and not restart_interrupted else 'blocked',
                         'error_message': error_message,
                         'resets_at': None,
                         'reset_window_minutes': None,
@@ -546,6 +552,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
             let mut last_step_status: Option<String> = None;
             let mut error_msg: Option<String> = None;
             let mut is_quota_limited = false;
+            let mut explicit_error = false;
             let mut last_step_created_at_ts: Option<i64> = None;
 
             if transcript_path.exists() {
@@ -555,14 +562,16 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
                     if let Some(last_line) = lines.last() {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(last_line) {
                             last_step_status = val.get("status").and_then(|s| s.as_str()).map(str::to_string);
-                            let err_str = val.get("error").and_then(|e| e.as_str());
+                            let err_str = val.get("error").and_then(|e| e.as_str()).filter(|e| !e.is_empty());
                             let content_str = val.get("content").and_then(|c| c.as_str()).unwrap_or("");
                             let created_at_str = val.get("created_at").and_then(|c| c.as_str());
                             if let Some(c_at) = created_at_str {
                                 last_step_created_at_ts = parse_iso_datetime_to_ts(c_at);
                             }
 
-                            if last_step_status.as_deref() == Some("ERROR") || err_str.is_some()
+                            explicit_error = last_step_status.as_deref() == Some("ERROR") || err_str.is_some()
+                                || val.get("type").and_then(|v| v.as_str()) == Some("ERROR_MESSAGE");
+                            if explicit_error
                                 || (val.get("type").and_then(|v| v.as_str()) == Some("SYSTEM_MESSAGE") && content_str.contains("RESOURCE_EXHAUSTED")) {
                                 error_msg = err_str.map(str::to_string).or_else(|| {
                                     if !content_str.is_empty() {
@@ -586,7 +595,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
 
             // If last step was modified in the last 20 seconds and finished cleanly (not ERROR), it is actively running in real-time
             if let Some(ts) = last_step_created_at_ts {
-                if now_ts - ts < 20 && last_step_status.as_deref() != Some("ERROR") && !is_quota_limited {
+                if now_ts - ts < 20 && last_step_status.as_deref() != Some("ERROR") && !is_quota_limited && !explicit_error {
                     continue;
                 }
             }
@@ -596,7 +605,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
             let not_idle = not_fully_idle.unwrap_or(0) == 1;
             let is_killed = killed.unwrap_or(0) == 1;
 
-            if last_step_status.as_deref() == Some("ERROR") || error_msg.is_some() {
+            if explicit_error || error_msg.is_some() {
                 is_interrupted = true;
             } else if (not_idle || c_status == "CASCADE_RUN_STATUS_RUNNING") && is_killed {
                 is_interrupted = true;
@@ -605,7 +614,11 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
                 }
             }
 
-            if is_interrupted && is_quota_limited {
+            let error_interrupted = explicit_error && !is_killed && !not_idle
+                && c_status == "CASCADE_RUN_STATUS_IDLE"
+                && last_mod_str.as_deref().and_then(parse_iso_datetime_to_ts)
+                    .is_some_and(|updated| updated >= now_ts - 7 * 86400);
+            if is_interrupted && (is_quota_limited || error_interrupted) {
                 seen_ids.insert(cid.clone());
 
                 let mut cwd = None;
@@ -645,7 +658,7 @@ pub fn detect_local_tasks() -> Vec<InterruptedAntigravityTask> {
                     objective: preview_opt,
                     cwd,
                     model: None,
-                    status: "usage_limited".to_string(),
+                    status: if is_quota_limited { "usage_limited" } else { "blocked" }.to_string(),
                     error_message: error_msg,
                     resets_at: earliest_resets_at,
                     reset_window_minutes: None,
@@ -696,7 +709,7 @@ pub async fn detect_remote_tasks(server: &SshServer) -> Result<Vec<InterruptedAn
         task.server_id = Some(server.id.clone());
         task.server_name = Some(server.name.clone());
         task.is_excluded = excluded_ids.contains(&task.id);
-        if task.status == "usage_limited" || task.background_agent_id.is_some() {
+        if task.status == "usage_limited" || task.status == "blocked" {
             task.resets_at = earliest_resets_at;
             task.can_resume = current_can_resume;
         }
@@ -1330,6 +1343,51 @@ mod tests {
         assert_eq!(tasks.len(), 2);
         assert!(tasks.iter().any(|t| t.thread_id == "current"));
         assert!(tasks.iter().any(|t| t.thread_id == "system"));
+        drop(db);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn auto_resume_regression_terminal_errors_only_when_idle_and_unresolved() {
+        let root = std::env::temp_dir().join(format!("cockpit-ag-network-{}", uuid::Uuid::new_v4()));
+        let db_home = root.join("antigravity");
+        std::fs::create_dir_all(&db_home).unwrap();
+        let db = rusqlite::Connection::open(db_home.join("conversation_summaries.db")).unwrap();
+        db.execute_batch("CREATE TABLE conversation_summaries (conversation_id TEXT,title TEXT,preview TEXT,status TEXT,not_fully_idle INTEGER,killed INTEGER,last_modified_time TEXT,workspace_uris TEXT)").unwrap();
+        // Matches macbookair: the failed API step is DONE and killed remains 0.
+        let error = "API error (attempt 8): request failed: Post \"https://example.test/stream\": EOF";
+        for case in ["network", "running", "busy", "stopped", "resolved", "stale", "unknown_error", "content_error", "status_error", "empty_error"] {
+            let timestamp = (Utc::now() - chrono::Duration::days(if case == "stale" { 20 } else { 0 })).to_rfc3339();
+            db.execute("INSERT INTO conversation_summaries VALUES (?, ?, '', ?, ?, ?, ?, NULL)",
+                rusqlite::params![case, case,
+                    if case == "running" { "CASCADE_RUN_STATUS_RUNNING" } else { "CASCADE_RUN_STATUS_IDLE" },
+                    i32::from(case == "busy"), i32::from(case == "stopped"), timestamp]).unwrap();
+            let logs = db_home.join("brain").join(case).join(".system_generated/logs");
+            std::fs::create_dir_all(&logs).unwrap();
+            let message = match case { "unknown_error" => "Unrecognized provider failure", "content_error" | "status_error" | "empty_error" => "", _ => error };
+            let mut steps = vec![serde_json::json!({"type": if case == "empty_error" || case == "status_error" { "GENERIC" } else { "ERROR_MESSAGE" },
+                "status": if case == "status_error" { "ERROR" } else { "DONE" },
+                "content": if case == "content_error" { "Unknown failure without an error field" } else { "" },
+                "error":message, "created_at":timestamp}).to_string()];
+            if case == "resolved" {
+                steps.push(serde_json::json!({"type":"PLANNER_RESPONSE", "status":"DONE", "content":"Finished"}).to_string());
+            }
+            std::fs::write(logs.join("transcript.jsonl"), steps.join("\n")).unwrap();
+        }
+        let output = std::process::Command::new("python3").args(["-c", PYTHON_REMOTE_PROBE])
+            .env("ANTIGRAVITY_HOME", &root).env("ANTIGRAVITY_SWITCH_AT", "0").output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let text = String::from_utf8_lossy(&output.stdout);
+        let json = text.split("__ANTIGRAVITY_PROBE_JSON_START__").nth(1).unwrap().split("__ANTIGRAVITY_PROBE_JSON_END__").next().unwrap();
+        let tasks: Vec<InterruptedAntigravityTask> = serde_json::from_str(json.trim()).unwrap();
+        assert_eq!(tasks.len(), 4, "{tasks:?}");
+        for id in ["network", "unknown_error", "content_error", "status_error"] {
+            let task = tasks.iter().find(|task| task.thread_id == id).unwrap();
+            assert_eq!(task.status, "blocked");
+            if id == "network" {
+                assert_eq!(task.error_message.as_deref(), Some(error));
+            }
+        }
         drop(db);
         std::fs::remove_dir_all(root).unwrap();
     }
