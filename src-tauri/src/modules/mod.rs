@@ -150,3 +150,5 @@ pub mod zed_oauth;
 pub use account::*;
 
 pub mod antigravity_acknowledgment;
+
+pub mod renderer_recovery;

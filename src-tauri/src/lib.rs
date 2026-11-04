@@ -377,6 +377,7 @@ pub fn run() {
 
             // 存储全局 AppHandle
             let _ = APP_HANDLE.set(app.handle().clone());
+            modules::renderer_recovery::start(app.handle());
 
             if let Err(err) = modules::app_lifecycle::install_system_shutdown_listener() {
                 logger::log_warn(&format!("[Lifecycle] 安装系统关机监听失败: {}", err));
@@ -914,6 +915,7 @@ pub fn run() {
             commands::system::save_diagnostics_config,
             commands::system::diagnostics_frontend_stage,
             commands::system::diagnostics_frontend_ready,
+            modules::renderer_recovery::renderer_probe_ack,
             commands::system::diagnostics_capture_event,
             commands::system::get_general_config,
             commands::system::get_available_terminals,
