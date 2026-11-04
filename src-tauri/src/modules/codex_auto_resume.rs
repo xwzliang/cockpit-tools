@@ -909,8 +909,8 @@ pub fn compute_earliest_quota_reset_from_accounts(
         can_resume: bool,
         hourly_reset_ts: Option<i64>,
         hourly_window: Option<i64>,
-        is_weekly_blocked: bool,
-        weekly_reset_ts: Option<i64>,
+        available_at: Option<i64>,
+        available_window: Option<i64>,
     }
 
     let mut candidates: Vec<CandidateInfo> = Vec::new();
@@ -967,8 +967,21 @@ pub fn compute_earliest_quota_reset_from_accounts(
             can_resume,
             hourly_reset_ts: hourly_reset,
             hourly_window,
-            is_weekly_blocked: weekly_exhausted,
-            weekly_reset_ts: weekly_reset,
+            // Every exhausted window must reset before this account is usable.
+            // An unknown blocking reset cannot yield a reliable countdown.
+            available_at: match (hourly_exhausted, weekly_exhausted) {
+                (true, true) => hourly_reset.zip(weekly_reset).map(|(h, w)| h.max(w)),
+                (true, false) => hourly_reset,
+                (false, true) => weekly_reset,
+                (false, false) => None,
+            },
+            available_window: if weekly_exhausted
+                && (!hourly_exhausted || weekly_reset > hourly_reset)
+            {
+                quota.weekly_window_minutes.or(Some(10080))
+            } else {
+                hourly_window
+            },
         });
     }
 
@@ -982,59 +995,25 @@ pub fn compute_earliest_quota_reset_from_accounts(
         return (ready.hourly_reset_ts, ready.hourly_window, true, Some(ready.email.clone()));
     }
 
-    // 3. 所有账号均未到恢复状态：在周配额未受限的账号中，按 5 小时重置时间升序排列，取最早者
-    let mut hourly_candidates: Vec<&CandidateInfo> = candidates
-        .iter()
-        .filter(|c| !c.is_weekly_blocked && c.hourly_reset_ts.is_some())
-        .collect();
-
-    if !hourly_candidates.is_empty() {
-        hourly_candidates.sort_by(|a, b| {
-            let a_ts = a.hourly_reset_ts.unwrap();
-            let b_ts = b.hourly_reset_ts.unwrap();
-            a_ts.cmp(&b_ts)
-                .then_with(|| b.is_current.cmp(&a.is_current))
-        });
-
-        let earliest = hourly_candidates[0];
+    // Compare each account's effective availability, not separate hourly/weekly
+    // lists. A weekly-blocked account may still recover before another account's
+    // hourly reset, and both limits on the winning account must be respected.
+    let earliest = candidates.iter()
+        .filter(|candidate| candidate.available_at.is_some())
+        .min_by(|a, b| a.available_at.cmp(&b.available_at)
+            .then_with(|| b.is_current.cmp(&a.is_current)));
+    if let Some(candidate) = earliest {
         return (
-            earliest.hourly_reset_ts,
-            earliest.hourly_window,
+            candidate.available_at,
+            candidate.available_window,
             false,
-            Some(earliest.email.clone()),
+            Some(candidate.email.clone()),
         );
     }
 
-    // 4. 若周配额均受限或无 5 小时重置时间，回退检查周重置时间
-    let mut weekly_candidates: Vec<&CandidateInfo> = candidates
-        .iter()
-        .filter(|c| c.weekly_reset_ts.is_some())
-        .collect();
+    // Keep this calculation independent of live global account state.
+    (None, None, false, candidates.iter().find(|c| c.is_current).map(|c| c.email.clone()))
 
-    if !weekly_candidates.is_empty() {
-        weekly_candidates.sort_by(|a, b| {
-            let a_ts = a.weekly_reset_ts.unwrap();
-            let b_ts = b.weekly_reset_ts.unwrap();
-            a_ts.cmp(&b_ts)
-                .then_with(|| b.is_current.cmp(&a.is_current))
-        });
-
-        let earliest = weekly_candidates[0];
-        return (
-            earliest.weekly_reset_ts,
-            earliest.hourly_window,
-            false,
-            Some(earliest.email.clone()),
-        );
-    }
-
-    // 5. 兜底回退
-    if let Some(curr) = current_account {
-        let (cur_reset, cur_window, cur_can) = get_current_codex_quota_resets_at();
-        (cur_reset, cur_window, cur_can, Some(curr.email.clone()))
-    } else {
-        (None, None, false, None)
-    }
 }
 
 /// 获取所有可用账号中最早的 5 小时配额重置时间戳（秒）、窗口时长、是否已有可用配额，以及最早重置的账号邮箱
@@ -2827,6 +2806,34 @@ for accepted in (True, False):
         assert_eq!(can_resume4, true);
         assert_eq!(resets_at4, Some(14000));
         assert_eq!(email4, Some("early@example.com".to_string()));
+
+        // Screenshot scenario: current weekly reset is days away; another
+        // account's weekly and hourly limits both reset within hours.
+        let current = make_account_with_quota("current", "current@example.com", 100, None, 0, Some(350000));
+        let sooner = make_account_with_quota("sooner", "sooner@example.com", 0, Some(28000), 0, Some(25000));
+        let result = compute_earliest_quota_reset_from_accounts(
+            now_ts, Some(&current), &[current.clone(), sooner.clone()], None);
+        assert_eq!(result, (Some(28000), Some(300), false, Some(sooner.email.clone())));
+
+        // Weekly reset can beat a different account's hourly reset.
+        let weekly_first = make_account_with_quota("weekly", "weekly@example.com", 100, None, 0, Some(12000));
+        let result = compute_earliest_quota_reset_from_accounts(
+            now_ts, Some(&acc_current), &[acc_current.clone(), weekly_first.clone()], None);
+        assert_eq!(result, (Some(12000), Some(10080), false, Some(weekly_first.email.clone())));
+
+        // Selected-account scope still excludes an otherwise earlier account.
+        let selected = std::collections::HashSet::from([current.id.clone()]);
+        let result = compute_earliest_quota_reset_from_accounts(
+            now_ts, Some(&current), &[current.clone(), sooner.clone()], Some(&selected));
+        assert_eq!(result.0, Some(350000));
+        assert_eq!(result.3, Some(current.email.clone()));
+
+        // A missing reset on either exhausted window is not a known deadline.
+        let unknown = make_account_with_quota("unknown", "unknown@example.com", 0, None, 0, Some(11000));
+        let result = compute_earliest_quota_reset_from_accounts(
+            now_ts, Some(&current), &[current.clone(), unknown], None);
+        assert_eq!(result.0, Some(350000));
+
     }
 }
 
