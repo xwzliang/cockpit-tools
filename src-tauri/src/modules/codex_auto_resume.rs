@@ -916,7 +916,7 @@ pub fn compute_earliest_quota_reset_from_accounts(
     let mut candidates: Vec<CandidateInfo> = Vec::new();
 
     for acc in accounts {
-        if acc.is_api_key_auth() || acc.is_agent_identity_auth() || acc.is_web_session_auth() {
+        if !acc.is_paid_switch_candidate() {
             continue;
         }
 
@@ -1703,10 +1703,7 @@ pub async fn check_and_auto_switch_for_earlier_reset(app: &AppHandle) -> Result<
         if !monitored_account_ids.contains(&account.id) {
             continue;
         }
-        if account.is_api_key_auth()
-            || account.is_agent_identity_auth()
-            || account.is_web_session_auth()
-        {
+        if !account.is_paid_switch_candidate() {
             continue;
         }
 
@@ -1802,6 +1799,12 @@ pub async fn check_and_auto_switch_for_earlier_reset(app: &AppHandle) -> Result<
         };
 
         if !is_ready {
+            continue;
+        }
+        // Refreshing quota may have revealed that a subscription was downgraded.
+        if !crate::modules::codex_account::list_accounts().iter()
+            .any(|account| account.id == cand.account.id && account.is_paid_switch_candidate())
+        {
             continue;
         }
 
@@ -2806,6 +2809,20 @@ for accepted in (True, False):
         assert_eq!(can_resume4, true);
         assert_eq!(resets_at4, Some(14000));
         assert_eq!(email4, Some("early@example.com".to_string()));
+
+        // Free accounts must neither make recovery look ready nor shorten its countdown.
+        let mut free = acc_ready.clone();
+        free.plan_type = Some("FREE".into());
+        let result = compute_earliest_quota_reset_from_accounts(
+            now_ts, Some(&acc_current), &[acc_current.clone(), free.clone()], None);
+        assert_eq!(result.0, Some(20000));
+        assert!(!result.2);
+        assert_eq!(result.3, Some(acc_current.email.clone()));
+        free.quota.as_mut().unwrap().hourly_percentage = 0;
+        free.quota.as_mut().unwrap().hourly_reset_time = Some(11000);
+        let result = compute_earliest_quota_reset_from_accounts(
+            now_ts, Some(&acc_current), &[acc_current.clone(), free], None);
+        assert_eq!(result.0, Some(20000));
 
         // Screenshot scenario: current weekly reset is days away; another
         // account's weekly and hourly limits both reset within hours.

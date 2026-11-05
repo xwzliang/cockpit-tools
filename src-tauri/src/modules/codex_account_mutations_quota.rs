@@ -863,6 +863,9 @@ fn build_switch_candidate(
     primary_threshold: i32,
     secondary_threshold: i32,
 ) -> Option<CodexSwitchCandidate> {
+    if !account.is_paid_switch_candidate() {
+        return None;
+    }
     let metrics = extract_quota_metrics(account);
     if metrics.is_empty() {
         return None;
@@ -1157,13 +1160,26 @@ mod weekly_reset_preference_tests {
 
     fn candidate(id: &str, hourly: i32, reset: Option<i64>) -> CodexSwitchCandidate {
         let account = serde_json::from_value(serde_json::json!({
-            "id": id, "email": format!("{id}@example.com"),
+            "id": id, "email": format!("{id}@example.com"), "plan_type": "plus",
             "created_at": 100, "last_used": 100,
             "tokens": {"access_token": "test", "refresh_token": "test", "id_token": "test"},
             "quota": {"hourly_percentage": hourly, "weekly_percentage": 80,
                 "weekly_reset_time": reset}
         })).unwrap();
         build_switch_candidate(&account, 10, 10).unwrap()
+    }
+
+    #[test]
+    fn paid_switch_candidates_exclude_free_even_with_full_quota() {
+        let mut account = candidate("downgraded", 100, None).account;
+        for plan in [None, Some("FREE"), Some(" free "), Some("unknown")] {
+            account.plan_type = plan.map(str::to_string);
+            assert!(build_switch_candidate(&account, 10, 10).is_none());
+        }
+        for plan in ["PLUS", "PRO", "pro_5x", "team", "business", "enterprise", "edu", "go"] {
+            account.plan_type = Some(plan.to_string());
+            assert!(build_switch_candidate(&account, 10, 10).is_some(), "{plan}");
+        }
     }
 
     #[test]

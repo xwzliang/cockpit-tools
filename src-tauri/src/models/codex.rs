@@ -682,6 +682,21 @@ impl CodexAccount {
         self.token_source_mode.trim() == "chatgpt_web_session"
     }
 
+    /// Automatic subscription-account switching must never target Free or
+    /// unknown plans, even if cached quota still shows available usage.
+    pub fn is_paid_switch_candidate(&self) -> bool {
+        if self.is_api_key_auth() || self.is_agent_identity_auth() || self.is_web_session_auth() {
+            return false;
+        }
+        let plan = self.plan_type.as_deref().unwrap_or("").trim().to_ascii_lowercase();
+        if plan.contains("free") {
+            return false;
+        }
+        ["plus", "pro", "team", "business", "enterprise", "edu", "go"]
+            .iter()
+            .any(|paid| plan == *paid || plan.starts_with(&format!("{paid}_")))
+    }
+
     pub fn update_last_used(&mut self) {
         self.last_used = chrono::Utc::now().timestamp();
     }
