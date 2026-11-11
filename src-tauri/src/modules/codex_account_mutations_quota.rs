@@ -1176,10 +1176,30 @@ mod weekly_reset_preference_tests {
             account.plan_type = plan.map(str::to_string);
             assert!(build_switch_candidate(&account, 10, 10).is_none());
         }
-        for plan in ["PLUS", "PRO", "pro_5x", "team", "business", "enterprise", "edu", "go"] {
+        for plan in ["PLUS", "PRO", "prolite", "promax", "pro-lite", "pro_5x", "team", "business", "enterprise", "edu", "go"] {
             account.plan_type = Some(plan.to_string());
             assert!(build_switch_candidate(&account, 10, 10).is_some(), "{plan}");
         }
+    }
+
+    #[test]
+    fn paid_switch_candidates_reject_expired_subscription_metadata() {
+        let mut account = candidate("expired-plus", 100, None).account;
+        // The subscriptions endpoint can restore PLUS after usage reported FREE.
+        // This was the November 11 regression: the period ended November 5.
+        for expiry in ["2026-11-05T05:40:25+00:00", "1793857225", "1793857225000"] {
+            account.subscription_active_until = Some(expiry.into());
+            assert!(!account.is_paid_switch_candidate_at(1794359290), "{expiry}");
+        }
+        let now = chrono::Utc::now().timestamp();
+        account.subscription_active_until = Some(now.to_string());
+        assert!(build_switch_candidate(&account, 10, 10).is_none());
+        account.subscription_active_until = Some((now + 86400).to_string());
+        assert!(build_switch_candidate(&account, 10, 10).is_some());
+        account.plan_type = Some("prolite".into());
+        assert!(build_switch_candidate(&account, 10, 10).is_some());
+        account.plan_type = Some("free".into());
+        assert!(build_switch_candidate(&account, 10, 10).is_none());
     }
 
     #[test]

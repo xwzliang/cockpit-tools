@@ -685,21 +685,46 @@ impl CodexAccount {
     /// Automatic subscription-account switching must never target Free or
     /// unknown plans, even if cached quota still shows available usage.
     pub fn is_paid_switch_candidate(&self) -> bool {
+        self.is_paid_switch_candidate_at(chrono::Utc::now().timestamp())
+    }
+
+    pub(crate) fn is_paid_switch_candidate_at(&self, now: i64) -> bool {
         if self.is_api_key_auth() || self.is_agent_identity_auth() || self.is_web_session_auth() {
             return false;
         }
         let plan = self.plan_type.as_deref().unwrap_or("").trim().to_ascii_lowercase();
-        if plan.contains("free") {
+        if plan.contains("free") || self.subscription_active_until.as_deref()
+            .and_then(parse_subscription_timestamp).is_some_and(|expires| expires <= now)
+        {
             return false;
         }
-        ["plus", "pro", "team", "business", "enterprise", "edu", "go"]
+        ["plus", "pro", "prolite", "promax", "team", "business", "enterprise", "edu", "go"]
             .iter()
-            .any(|paid| plan == *paid || plan.starts_with(&format!("{paid}_")))
+            .any(|paid| plan == *paid || plan.starts_with(&format!("{paid}_")) || plan.starts_with(&format!("{paid}-")))
     }
 
     pub fn update_last_used(&mut self) {
         self.last_used = chrono::Utc::now().timestamp();
     }
+}
+
+pub(crate) fn parse_subscription_timestamp(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
+        let mut timestamp = trimmed.parse::<i64>().ok()?;
+        if timestamp > 1_000_000_000_000 {
+            timestamp /= 1000;
+        }
+        return Some(timestamp);
+    }
+
+    chrono::DateTime::parse_from_rfc3339(trimmed)
+        .ok()
+        .map(|parsed| parsed.timestamp())
 }
 
 #[cfg(test)]

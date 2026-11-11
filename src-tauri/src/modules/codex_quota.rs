@@ -1,4 +1,4 @@
-use crate::models::codex::{CodexAccount, CodexQuota, CodexQuotaErrorInfo, CodexResetCredit};
+use crate::models::codex::{parse_subscription_timestamp, CodexAccount, CodexQuota, CodexQuotaErrorInfo, CodexResetCredit};
 use crate::modules::{codex_account, codex_agent_identity, logger};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, REFERER, USER_AGENT};
 use reqwest::{Method, StatusCode};
@@ -421,25 +421,6 @@ fn normalize_optional_json_scalar(value: Option<&serde_json::Value>) -> Option<S
         serde_json::Value::Bool(flag) => Some(flag.to_string()),
         _ => None,
     }
-}
-
-fn parse_subscription_timestamp(raw: &str) -> Option<i64> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if trimmed.chars().all(|ch| ch.is_ascii_digit()) {
-        let mut timestamp = trimmed.parse::<i64>().ok()?;
-        if timestamp > 1_000_000_000_000 {
-            timestamp /= 1000;
-        }
-        return Some(timestamp);
-    }
-
-    chrono::DateTime::parse_from_rfc3339(trimmed)
-        .ok()
-        .map(|parsed| parsed.timestamp())
 }
 
 fn subscription_missing_or_expired(raw: Option<&str>) -> bool {

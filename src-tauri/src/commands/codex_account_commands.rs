@@ -1500,6 +1500,14 @@ async fn run_codex_post_refresh_checks(app: &AppHandle) {
                     return;
                 }
             }
+            // Account state may change while the activity probe is awaiting SSH.
+            if !codex_account::load_account(&target.id)
+                .is_some_and(|account| account.is_paid_switch_candidate())
+            {
+                logger::log_info("[AutoSwitch][Codex] Target is no longer an active paid account; switch skipped");
+                CODEX_POST_REFRESH_CHECK_IN_PROGRESS.store(false, Ordering::SeqCst);
+                return;
+            }
             let target_id = target.id.clone();
             // Keep the large switch state machine out of the post-refresh Future.
             match Box::pin(switch_codex_account(

@@ -916,7 +916,7 @@ pub fn compute_earliest_quota_reset_from_accounts(
     let mut candidates: Vec<CandidateInfo> = Vec::new();
 
     for acc in accounts {
-        if !acc.is_paid_switch_candidate() {
+        if !acc.is_paid_switch_candidate_at(now_ts) {
             continue;
         }
 
@@ -2823,6 +2823,13 @@ for accepted in (True, False):
         let result = compute_earliest_quota_reset_from_accounts(
             now_ts, Some(&acc_current), &[acc_current.clone(), free], None);
         assert_eq!(result.0, Some(20000));
+
+        let mut expired = acc_ready.clone();
+        expired.subscription_active_until = Some(now_ts.to_string());
+        let result = compute_earliest_quota_reset_from_accounts(
+            now_ts, Some(&acc_current), &[acc_current.clone(), expired], None);
+        assert_eq!(result.0, Some(20000));
+        assert!(!result.2);
 
         // Screenshot scenario: current weekly reset is days away; another
         // account's weekly and hourly limits both reset within hours.
