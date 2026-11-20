@@ -1826,6 +1826,7 @@
       "viewError": "查看错误",
       "switch": "切换账号",
       "switchTo": "切换到此账号",
+      "switchRemotePool": "将 {{server}} 切换到此账号",
       "delete": "删除",
       "deleteSelected": "删除选中",
       "export": "导出",
@@ -1971,6 +1972,8 @@
     "switchFailed": "切换失败：{{error}}",
     "switchSuccess": "切换成功",
     "switched": "已切换至 {{email}}",
+    "remotePoolSwitched": "已将 {{server}} 切换至 {{email}}",
+    "remotePoolSwitchFailed": "切换 {{server}} 失败：{{error}}",
     "tagButton": "编辑标签",
     "tagUpdated": "标签已更新",
     "plan": {

@@ -90,7 +90,11 @@ import { getPlatformLabel, renderPlatformIcon } from '../utils/platformMeta';
 import { setAntigravityRuntimeTargetFromPlatform } from '../utils/antigravityRuntimeTarget';
 import { useAntigravityRuntimeTarget } from '../hooks/useAntigravityRuntimeTarget';
 import { useAntigravityRemotePools } from '../hooks/useAntigravityRemotePools';
-import { getRemotePoolHighlightClasses } from '../utils/antigravityRemotePools';
+import {
+  getEligibleRemotePoolsForAccount,
+  getRemotePoolHighlightClasses,
+  getRemotePoolSwitchKey,
+} from '../utils/antigravityRemotePools';
 import { ManualHelpIconButton } from '../components/ManualHelpIconButton';
 import { AnnouncementCenter } from '../components/AnnouncementCenter';
 import { isPrivacyModeEnabledByDefault, maskSensitiveValue } from '../utils/privacy';
@@ -298,7 +302,25 @@ export function DashboardPage({
 }: DashboardPageProps) {
   const { t } = useTranslation();
   const antigravityRuntimeTarget = useAntigravityRuntimeTarget();
-  const agRemotePoolUsageMap = useAntigravityRemotePools();
+  const {
+    usageMap: agRemotePoolUsageMap,
+    pools: agRemotePools,
+    switchingKeys: agRemoteSwitchingKeys,
+    switchRemotePoolAccount,
+  } = useAntigravityRemotePools();
+
+  const handleSwitchAgRemotePool = async (serverId: string, accountId: string) => {
+    const switchKey = getRemotePoolSwitchKey(serverId, accountId);
+    if (agRemoteSwitchingKeys.has(switchKey)) return;
+    try {
+      const result = await switchRemotePoolAccount(serverId, accountId);
+      if (!result.verified && result.error) {
+        console.error('Remote Antigravity switch failed:', result.error);
+      }
+    } catch (error) {
+      console.error('Remote Antigravity switch failed:', error);
+    }
+  };
 
   const [tagModalState, setTagModalState] = React.useState<{ accountId: string; platform: PlatformId | 'codebuddy_cn'; tags: string[] } | null>(null);
   const [dashboardCardCollapse, setDashboardCardCollapse] = React.useState<DashboardCardCollapseState>({
@@ -2269,6 +2291,7 @@ export function DashboardPage({
     const presentation = buildAntigravityAccountPresentation(account, agDisplayGroups, t);
     const quotaDisplayItems = presentation.quotaItems.slice(0, 4);
     const remotePoolBadges = agRemotePoolUsageMap[account.id] ?? [];
+    const eligibleRemotePools = getEligibleRemotePoolsForAccount(agRemotePools, account);
 
     return (
       <div className="account-mini-card">
@@ -2340,6 +2363,30 @@ export function DashboardPage({
           >
             <Play size={14} />
           </button>
+          {eligibleRemotePools.map((pool) => {
+            const switchKey = getRemotePoolSwitchKey(pool.serverId, account.id);
+            const isSwitchingRemote = agRemoteSwitchingKeys.has(switchKey);
+            return (
+              <button
+                key={pool.serverId}
+                type="button"
+                className={`mini-remote-switch-btn remote-pool-color-${pool.colorIndex}`}
+                onClick={() => void handleSwitchAgRemotePool(pool.serverId, account.id)}
+                disabled={isSwitchingRemote}
+                title={t('accounts.actions.switchRemotePool', {
+                  server: pool.serverName,
+                  defaultValue: 'Switch {{server}} to this account',
+                })}
+              >
+                {isSwitchingRemote ? (
+                  <RotateCw size={11} className="loading-spinner" />
+                ) : (
+                  <Play size={11} />
+                )}
+                <span>{pool.serverName}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
     );

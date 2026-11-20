@@ -348,6 +348,32 @@
   cursor: not-allowed;
 }
 
+.remoteSwitchBtn {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--compact-radius);
+  border: 1px solid transparent;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  opacity: 0.9;
+}
+
+.remoteSwitchBtn:hover:not(:disabled) {
+  opacity: 1;
+  filter: brightness(1.08);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.14);
+}
+
+.remoteSwitchBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .noteBtn {
   width: auto;
   max-width: 108px;

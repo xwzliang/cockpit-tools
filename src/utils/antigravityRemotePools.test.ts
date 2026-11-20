@@ -2,8 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SshServer } from '../types/sshServer';
 import {
+  buildAntigravityRemotePools,
   buildAntigravityRemotePoolUsageMap,
+  getEligibleRemotePoolsForAccount,
   getRemotePoolHighlightClasses,
+  getRemotePoolSwitchKey,
   REMOTE_POOL_COLOR_COUNT,
 } from './antigravityRemotePools';
 
@@ -134,4 +137,58 @@ test('assigns distinct colors to multiple independent pools and falls back to ho
   assert.equal(map['acc-1'][0].colorIndex, 1);
   assert.equal(map['acc-3'][0].colorIndex, 3);
   assert.equal(map[`acc-${REMOTE_POOL_COLOR_COUNT}`][0].colorIndex, 0);
+});
+
+test('filters eligible independent pools per account based on exclusions and account state', () => {
+  const pools = buildAntigravityRemotePools([
+    makeServer({
+      id: 'srv-mba',
+      name: 'macbookair',
+      antigravity_account_policy: {
+        mode: 'independent',
+        excluded_account_ids: ['acc-local-only'],
+        quota_threshold: 20,
+      },
+    }),
+    makeServer({
+      id: 'srv-follow',
+      name: 'follower',
+      antigravity_account_policy: {
+        mode: 'follow_local',
+        excluded_account_ids: [],
+        quota_threshold: 20,
+      },
+    }),
+    makeServer({
+      id: 'srv-linux',
+      name: 'linux-dev',
+      antigravity_account_policy: {
+        mode: 'independent',
+        excluded_account_ids: [],
+        quota_threshold: 20,
+      },
+    }),
+  ]);
+
+  assert.equal(pools.length, 2);
+  assert.equal(pools[0].colorIndex, 0);
+  assert.equal(pools[1].colorIndex, 1);
+  assert.equal(getRemotePoolSwitchKey('srv-mba', 'acc-1'), 'srv-mba::acc-1');
+
+  assert.deepEqual(
+    getEligibleRemotePoolsForAccount(pools, { id: 'acc-local-only' }).map((p) => p.serverId),
+    ['srv-linux'],
+  );
+  assert.deepEqual(
+    getEligibleRemotePoolsForAccount(pools, { id: 'acc-shared' }).map((p) => p.serverId),
+    ['srv-mba', 'srv-linux'],
+  );
+  assert.deepEqual(
+    getEligibleRemotePoolsForAccount(pools, { id: 'acc-shared', disabled: true }),
+    [],
+  );
+  assert.deepEqual(
+    getEligibleRemotePoolsForAccount(pools, { id: 'acc-shared', pending_oauth: true }),
+    [],
+  );
 });

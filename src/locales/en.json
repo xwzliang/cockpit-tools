@@ -1826,6 +1826,7 @@
       "viewError": "View error",
       "switch": "Switch account",
       "switchTo": "Switch to this account",
+      "switchRemotePool": "Switch {{server}} to this account",
       "delete": "Delete",
       "deleteSelected": "Delete Selected",
       "export": "Export",
@@ -1971,6 +1972,8 @@
     "switchFailed": "Switch failed: {{error}}",
     "switchSuccess": "Switch successful",
     "switched": "Switched to {{email}}",
+    "remotePoolSwitched": "Switched {{server}} to {{email}}",
+    "remotePoolSwitchFailed": "Failed to switch {{server}}: {{error}}",
     "tagButton": "Edit Tags",
     "tagUpdated": "Tag updated",
     "plan": {

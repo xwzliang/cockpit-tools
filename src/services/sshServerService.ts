@@ -63,6 +63,16 @@ export async function syncCurrentAntigravityAccountToSshServer(
   });
 }
 
+export async function syncAntigravityAccountToSshServer(
+  serverId: string,
+  accountId: string,
+): Promise<SshAntigravitySyncResult> {
+  return await invoke('sync_antigravity_account_to_ssh_server', {
+    serverId,
+    accountId,
+  });
+}
+
 export async function listSshConfigHosts(): Promise<string[]> {
   return await invoke('list_ssh_config_hosts');
 }

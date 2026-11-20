@@ -1608,6 +1608,38 @@ pub async fn sync_current_antigravity_account_to_server(
     Ok(sync_antigravity_account_to_server(server, &account).await)
 }
 
+pub async fn sync_antigravity_account_to_server_by_id(
+    server_id: String,
+    account_id: String,
+) -> Result<SshAntigravitySyncResult, String> {
+    let _guard = ANTIGRAVITY_SYNC_LOCK.lock().await;
+    let trimmed_server_id = server_id.trim();
+    if trimmed_server_id.is_empty() {
+        return Err("SSH server ID is required".to_string());
+    }
+    let trimmed_account_id = account_id.trim();
+    if trimmed_account_id.is_empty() {
+        return Err("Account ID is required".to_string());
+    }
+    let store = load_store()?;
+    let server = store
+        .servers
+        .iter()
+        .find(|server| server.id == trimmed_server_id)
+        .cloned()
+        .ok_or_else(|| format!("SSH server not found: {}", trimmed_server_id))?;
+    let account = account::load_account(trimmed_account_id)?;
+    if !antigravity_account_allowed(&server, &account) {
+        return Err("Account is excluded from this remote machine".to_string());
+    }
+    let result = sync_antigravity_account_to_server(server, &account).await;
+    if let Some(app) = crate::get_app_handle() {
+        use tauri::Emitter;
+        let _ = app.emit("antigravity:ssh-sync-result", &result);
+    }
+    Ok(result)
+}
+
 pub async fn sync_selected_server_after_antigravity_switch(
     account: &Account,
 ) -> Option<SshAntigravitySyncResult> {
@@ -1811,6 +1843,14 @@ mod tests {
         let mut invalid = existing;
         invalid.antigravity_account_policy.as_mut().unwrap().quota_threshold = 100;
         assert!(normalize_server(invalid, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn sync_antigravity_account_by_id_rejects_blank_identifiers() {
+        let missing_server = sync_antigravity_account_to_server_by_id("   ".into(), "acc-1".into()).await;
+        assert!(missing_server.is_err());
+        let missing_account = sync_antigravity_account_to_server_by_id("srv-1".into(), "  ".into()).await;
+        assert!(missing_account.is_err());
     }
 
     #[test]

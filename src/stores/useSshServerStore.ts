@@ -22,6 +22,7 @@ interface SshServerState {
   testConnection: (serverId: string) => Promise<string>;
   syncNow: (serverId?: string | null) => Promise<SshCodexSyncResult>;
   syncAntigravityNow: (serverId?: string | null) => Promise<SshAntigravitySyncResult>;
+  syncAntigravityAccount: (serverId: string, accountId: string) => Promise<SshAntigravitySyncResult>;
   applySyncResult: (result: SshCodexSyncResult) => void;
   applyAntigravitySyncResult: (result: SshAntigravitySyncResult) => void;
 }
@@ -100,6 +101,16 @@ export const useSshServerStore = create<SshServerState>((set, get) => ({
   syncAntigravityNow: async (serverId) => {
     const result = await sshServerService.syncCurrentAntigravityAccountToSshServer(
       serverId ?? get().selectedAntigravityServerId,
+    );
+    get().applyAntigravitySyncResult(result);
+    void get().fetchServers();
+    return result;
+  },
+
+  syncAntigravityAccount: async (serverId, accountId) => {
+    const result = await sshServerService.syncAntigravityAccountToSshServer(
+      serverId,
+      accountId,
     );
     get().applyAntigravitySyncResult(result);
     void get().fetchServers();

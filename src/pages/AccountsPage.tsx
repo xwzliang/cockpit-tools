@@ -120,7 +120,11 @@ import {
 } from '../utils/accountsOverviewFilterPersistence'
 import { useAntigravityRuntimeTarget } from '../hooks/useAntigravityRuntimeTarget'
 import { useAntigravityRemotePools } from '../hooks/useAntigravityRemotePools'
-import { getRemotePoolHighlightClasses } from '../utils/antigravityRemotePools'
+import {
+  getEligibleRemotePoolsForAccount,
+  getRemotePoolHighlightClasses,
+  getRemotePoolSwitchKey,
+} from '../utils/antigravityRemotePools'
 import { useRememberMfaQuery } from '../hooks/useRememberMfaQuery'
 import {
   getMfaOtpToken,
@@ -199,7 +203,12 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     updateAccountNotes
   } = useAccountStore()
   const currentAccount = currentAccountsByTarget[antigravityRuntimeTarget] ?? null
-  const remotePoolUsageMap = useAntigravityRemotePools()
+  const {
+    usageMap: remotePoolUsageMap,
+    pools: remotePools,
+    switchingKeys: remotePoolSwitchingKeys,
+    switchRemotePoolAccount,
+  } = useAntigravityRemotePools()
 
   const formatSwitchError = useCallback((error: unknown) => String(error), [])
 
@@ -3038,11 +3047,51 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     <AntigravityQuotaSection items={getQuotaDisplayItems(account)} isList={isList} t={t} />
   );
 
+  const handleSwitchRemotePool = useCallback(
+    async (serverId: string, serverName: string, account: Account) => {
+      const switchKey = getRemotePoolSwitchKey(serverId, account.id)
+      if (remotePoolSwitchingKeys.has(switchKey)) return
+      setMessage(null)
+      try {
+        const result = await switchRemotePoolAccount(serverId, account.id)
+        if (result.verified) {
+          setMessage({
+            text: t('messages.remotePoolSwitched', {
+              server: serverName,
+              email: maskAccountText(account.email),
+              defaultValue: 'Switched {{server}} to {{email}}',
+            }),
+          })
+        } else {
+          setMessage({
+            text: t('messages.remotePoolSwitchFailed', {
+              server: serverName,
+              error: result.error || 'Unknown error',
+              defaultValue: 'Failed to switch {{server}}: {{error}}',
+            }),
+            tone: 'error',
+          })
+        }
+      } catch (error) {
+        setMessage({
+          text: t('messages.remotePoolSwitchFailed', {
+            server: serverName,
+            error: formatSwitchError(error),
+            defaultValue: 'Failed to switch {{server}}: {{error}}',
+          }),
+          tone: 'error',
+        })
+      }
+    },
+    [formatSwitchError, maskAccountText, remotePoolSwitchingKeys, switchRemotePoolAccount, t],
+  )
+
   const renderGridCards = (items: Account[], groupKey?: string) =>
     items.map((account) => {
       const isCurrent = currentAccount?.id === account.id
       const remotePoolBadges = remotePoolUsageMap[account.id] ?? []
       const remotePoolHighlightClass = getRemotePoolHighlightClasses(remotePoolBadges)
+      const eligibleRemotePools = getEligibleRemotePoolsForAccount(remotePools, account)
       const tierBadge = getAntigravityTierBadge(account.quota)
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isDisabled = account.disabled
@@ -3258,6 +3307,30 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                   <Play size={14} />
                 )}
               </button>
+              {eligibleRemotePools.map((pool) => {
+                const switchKey = getRemotePoolSwitchKey(pool.serverId, account.id)
+                const isSwitchingRemote = remotePoolSwitchingKeys.has(switchKey)
+                return (
+                  <button
+                    key={pool.serverId}
+                    type="button"
+                    className={`card-action-btn remote-pool-switch-btn remote-pool-color-${pool.colorIndex}`}
+                    onClick={() => void handleSwitchRemotePool(pool.serverId, pool.serverName, account)}
+                    disabled={isSwitchingRemote}
+                    title={t('accounts.actions.switchRemotePool', {
+                      server: pool.serverName,
+                      defaultValue: 'Switch {{server}} to this account',
+                    })}
+                  >
+                    {isSwitchingRemote ? (
+                      <RefreshCw size={12} className="loading-spinner" />
+                    ) : (
+                      <Play size={12} />
+                    )}
+                    <span>{pool.serverName}</span>
+                  </button>
+                )
+              })}
               <button
                 className={`card-action-btn${refreshResult[account.id] === 'success' ? ' is-success' : refreshResult[account.id] === 'error' ? ' is-danger' : ''}`}
                 onClick={() => handleRefresh(account.id)}
@@ -3447,6 +3520,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       items.map((account) => {
         const isCurrent = currentAccount?.id === account.id
         const remotePoolBadges = remotePoolUsageMap[account.id] ?? []
+        const eligibleRemotePools = getEligibleRemotePoolsForAccount(remotePools, account)
         const compactRemotePoolClass =
           remotePoolBadges.length > 0
             ? `${styles.cardRemotePool} ${styles[`cardRemotePoolColor${remotePoolBadges[0].colorIndex}`] ?? ''}`
@@ -3602,6 +3676,36 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
             >
               <Play size={12} />
             </button>
+            {eligibleRemotePools.map((pool) => {
+              const switchKey = getRemotePoolSwitchKey(pool.serverId, account.id)
+              const isSwitchingRemote = remotePoolSwitchingKeys.has(switchKey)
+              return (
+                <button
+                  key={pool.serverId}
+                  type="button"
+                  className={`${styles.remoteSwitchBtn} ${styles[`remotePoolColor${pool.colorIndex}`] ?? ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void handleSwitchRemotePool(pool.serverId, pool.serverName, account)
+                  }}
+                  disabled={isSwitchingRemote}
+                  title={t('accounts.actions.switchRemotePool', {
+                    server: pool.serverName,
+                    defaultValue: 'Switch {{server}} to this account',
+                  })}
+                  aria-label={t('accounts.actions.switchRemotePool', {
+                    server: pool.serverName,
+                    defaultValue: 'Switch {{server}} to this account',
+                  })}
+                >
+                  {isSwitchingRemote ? (
+                    <RefreshCw size={11} className="loading-spinner" />
+                  ) : (
+                    <Play size={11} />
+                  )}
+                </button>
+              )
+            })}
           </div>
         )
       })
@@ -3744,6 +3848,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       const isCurrent = currentAccount?.id === account.id
       const remotePoolBadges = remotePoolUsageMap[account.id] ?? []
       const remotePoolHighlightClass = getRemotePoolHighlightClasses(remotePoolBadges)
+      const eligibleRemotePools = getEligibleRemotePoolsForAccount(remotePools, account)
       const tierBadge = getAntigravityTierBadge(account.quota)
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isForbidden = Boolean(account.quota?.is_forbidden)
@@ -3927,6 +4032,30 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                   <Play size={16} />
                 )}
               </button>
+              {eligibleRemotePools.map((pool) => {
+                const switchKey = getRemotePoolSwitchKey(pool.serverId, account.id)
+                const isSwitchingRemote = remotePoolSwitchingKeys.has(switchKey)
+                return (
+                  <button
+                    key={pool.serverId}
+                    type="button"
+                    className={`action-btn remote-pool-switch-btn remote-pool-color-${pool.colorIndex}`}
+                    onClick={() => void handleSwitchRemotePool(pool.serverId, pool.serverName, account)}
+                    disabled={isSwitchingRemote}
+                    title={t('accounts.actions.switchRemotePool', {
+                      server: pool.serverName,
+                      defaultValue: 'Switch {{server}} to this account',
+                    })}
+                  >
+                    {isSwitchingRemote ? (
+                      <RefreshCw size={12} className="loading-spinner" />
+                    ) : (
+                      <Play size={12} />
+                    )}
+                    <span>{pool.serverName}</span>
+                  </button>
+                )
+              })}
               <button
                 className={`action-btn${refreshResult[account.id] === 'success' ? ' is-success' : refreshResult[account.id] === 'error' ? ' is-danger' : ''}`}
                 onClick={() => handleRefresh(account.id)}

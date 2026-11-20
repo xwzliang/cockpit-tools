@@ -10,6 +10,66 @@ export interface AntigravityRemotePoolUsage {
   colorIndex: number;
 }
 
+export interface AntigravityRemotePoolInfo {
+  serverId: string;
+  serverName: string;
+  host: string;
+  colorIndex: number;
+  excludedAccountIds: ReadonlySet<string>;
+  activeAccountId: string | null;
+}
+
+/**
+ * Returns metadata for every SSH server configured with an independent
+ * Antigravity account pool, in deterministic palette order.
+ */
+export function buildAntigravityRemotePools(
+  servers: readonly SshServer[],
+): AntigravityRemotePoolInfo[] {
+  const pools: AntigravityRemotePoolInfo[] = [];
+
+  for (const server of servers) {
+    if (server.antigravity_account_policy?.mode !== 'independent') {
+      continue;
+    }
+
+    const colorIndex = pools.length % REMOTE_POOL_COLOR_COUNT;
+    const lastSync = server.last_antigravity_sync;
+    const activeAccountId =
+      lastSync?.verified && lastSync.account_id?.trim()
+        ? lastSync.account_id.trim()
+        : null;
+
+    pools.push({
+      serverId: server.id,
+      serverName: server.name.trim() || server.host,
+      host: server.host,
+      colorIndex,
+      excludedAccountIds: new Set(server.antigravity_account_policy.excluded_account_ids ?? []),
+      activeAccountId,
+    });
+  }
+
+  return pools;
+}
+
+/**
+ * Filters independent remote pools to those allowed to switch to the given account.
+ */
+export function getEligibleRemotePoolsForAccount(
+  pools: readonly AntigravityRemotePoolInfo[],
+  account: { id: string; disabled?: boolean; pending_oauth?: boolean },
+): AntigravityRemotePoolInfo[] {
+  if (account.disabled || account.pending_oauth) {
+    return [];
+  }
+  return pools.filter((pool) => !pool.excludedAccountIds.has(account.id));
+}
+
+export function getRemotePoolSwitchKey(serverId: string, accountId: string): string {
+  return `${serverId}::${accountId}`;
+}
+
 /**
  * Builds a lookup from Antigravity account ID to the independent-pool remote
  * SSH machines currently verified to be using that account.

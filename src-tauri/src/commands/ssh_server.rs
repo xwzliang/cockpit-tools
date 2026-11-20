@@ -43,6 +43,14 @@ pub async fn sync_current_antigravity_account_to_ssh_server(
 }
 
 #[tauri::command]
+pub async fn sync_antigravity_account_to_ssh_server(
+    server_id: String,
+    account_id: String,
+) -> Result<SshAntigravitySyncResult, String> {
+    ssh_server::sync_antigravity_account_to_server_by_id(server_id, account_id).await
+}
+
+#[tauri::command]
 pub fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
     ssh_server::list_ssh_config_hosts()
 }
