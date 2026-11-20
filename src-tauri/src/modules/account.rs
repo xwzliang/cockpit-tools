@@ -1180,7 +1180,9 @@ fn normalize_auto_switch_selected_group_ids(raw: &[String]) -> Vec<String> {
 
 fn normalize_auto_switch_account_scope_mode(raw: &str) -> String {
     let normalized = raw.trim().to_lowercase();
-    if normalized == AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
+    if normalized == "excluded_accounts" {
+        "excluded_accounts".to_string()
+    } else if normalized == AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
         AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED.to_string()
     } else {
         AUTO_SWITCH_ACCOUNT_SCOPE_ALL.to_string()
@@ -1205,6 +1207,18 @@ fn resolve_monitored_auto_switch_account_ids(
     selected_account_ids: &[String],
     accounts: &[Account],
 ) -> HashSet<String> {
+    if scope_mode == "excluded_accounts" {
+        let excluded: HashSet<String> =
+            normalize_auto_switch_selected_account_ids(selected_account_ids)
+                .into_iter()
+                .collect();
+        return accounts
+            .iter()
+            .filter(|account| !excluded.contains(&account.id))
+            .map(|account| account.id.clone())
+            .collect();
+    }
+
     if scope_mode != AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
         return accounts.iter().map(|account| account.id.clone()).collect();
     }
@@ -1830,7 +1844,7 @@ async fn run_auto_switch_if_needed_inner() -> Result<Option<Account>, String> {
         ));
         return Ok(None);
     }
-    if !monitored_account_ids.contains(&current_id) {
+    if account_scope_mode != "excluded_accounts" && !monitored_account_ids.contains(&current_id) {
         modules::logger::log_info(&format!(
             "[AutoSwitch] 当前账号不在监控范围内(current_id={}, scope={})，跳过自动切号",
             current_id, account_scope_mode
@@ -2737,4 +2751,28 @@ fn auto_resume_regression_pool_candidates_without_legacy_pro_models() {
     account.quota.as_mut().unwrap().models[0].percentage = 0;
     assert!(!can_be_auto_switch_candidate(&account, "other", 0, &groups, false, 5));
     assert!(evaluate_auto_switch_trigger(&account, 5, "any_group", &groups, false, 5).is_some());
+}
+
+#[cfg(test)]
+mod local_account_exclusion_tests {
+    use super::*;
+
+    #[test]
+    fn local_account_exclusions_resolve_complement_without_fallback() {
+        let accounts: Vec<_> = ["premium", "remote-only", "new-account"].into_iter()
+            .map(|id| Account::new(id.into(), format!("{id}@example.test"),
+                TokenData::new("test".into(), "test".into(), 3600, None, None, None))).collect();
+        let excluded = vec![" remote-only ".into(), "remote-only".into(), "deleted".into()];
+        let allowed = resolve_monitored_auto_switch_account_ids("excluded_accounts", &excluded, &accounts);
+        assert_eq!(allowed, HashSet::from(["premium".into(), "new-account".into()]));
+        assert_eq!(resolve_monitored_auto_switch_account_ids("excluded_accounts", &[], &accounts).len(), 3);
+        let all_ids: Vec<_> = accounts.iter().map(|account| account.id.clone()).collect();
+        assert!(resolve_monitored_auto_switch_account_ids("excluded_accounts", &all_ids, &accounts).is_empty());
+        assert!(resolve_monitored_auto_switch_account_ids("selected_accounts", &[], &accounts).is_empty());
+        assert_eq!(resolve_monitored_auto_switch_account_ids("selected_accounts", &excluded, &accounts),
+            HashSet::from(["remote-only".into()]));
+        assert_eq!(resolve_monitored_auto_switch_account_ids("all_accounts", &excluded, &accounts).len(), 3);
+        assert_eq!(normalize_auto_switch_account_scope_mode(" EXCLUDED_ACCOUNTS "), "excluded_accounts");
+        assert_eq!(normalize_auto_switch_account_scope_mode("unknown"), "all_accounts");
+    }
 }

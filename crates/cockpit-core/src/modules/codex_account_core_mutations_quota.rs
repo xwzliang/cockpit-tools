@@ -340,7 +340,9 @@ fn normalize_auto_switch_threshold(raw: i32) -> i32 {
 
 fn normalize_auto_switch_account_scope_mode(raw: &str) -> String {
     let normalized = raw.trim().to_lowercase();
-    if normalized == CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
+    if normalized == "excluded_accounts" {
+        "excluded_accounts".to_string()
+    } else if normalized == CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
         CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED.to_string()
     } else {
         CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_ALL.to_string()
@@ -365,6 +367,18 @@ fn resolve_monitored_auto_switch_account_ids(
     selected_account_ids: &[String],
     accounts: &[CodexAccount],
 ) -> HashSet<String> {
+    if scope_mode == "excluded_accounts" {
+        let excluded: HashSet<String> =
+            normalize_auto_switch_selected_account_ids(selected_account_ids)
+                .into_iter()
+                .collect();
+        return accounts
+            .iter()
+            .filter(|account| !excluded.contains(&account.id))
+            .map(|account| account.id.clone())
+            .collect();
+    }
+
     if scope_mode != CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
         return accounts.iter().map(|account| account.id.clone()).collect();
     }
@@ -695,7 +709,7 @@ pub fn pick_auto_switch_target_if_needed() -> Result<Option<CodexAccount>, Strin
             Some(id) => id,
             None => return Ok(None),
         };
-        if !monitored_account_ids.contains(&current_id) {
+        if account_scope_mode != "excluded_accounts" && !monitored_account_ids.contains(&current_id) {
             logger::log_info(&format!(
                 "[AutoSwitch][Codex] 当前账号不在监控范围内(current_id={}, scope={})，跳过自动切号",
                 current_id, account_scope_mode
@@ -863,5 +877,32 @@ mod weekly_reset_preference_tests {
             candidate("more_low", 40, Some(now + 3600)),
         ]).unwrap();
         assert_eq!(selected.id, "more_low");
+    }
+}
+
+#[cfg(test)]
+mod local_account_exclusion_tests {
+    use super::*;
+
+    #[test]
+    fn local_account_exclusions_resolve_complement_without_fallback() {
+        let accounts: Vec<_> = ["premium", "remote-only", "new-account"].into_iter()
+            .map(|id| serde_json::from_value::<CodexAccount>(serde_json::json!({
+                "id": id, "email": format!("{id}@example.test"),
+                "created_at": 100, "last_used": 100,
+                "tokens": {"access_token": "test", "refresh_token": "test", "id_token": "test"}
+            })).unwrap()).collect();
+        let excluded = vec![" remote-only ".into(), "remote-only".into(), "deleted".into()];
+        let allowed = resolve_monitored_auto_switch_account_ids("excluded_accounts", &excluded, &accounts);
+        assert_eq!(allowed, HashSet::from(["premium".into(), "new-account".into()]));
+        assert_eq!(resolve_monitored_auto_switch_account_ids("excluded_accounts", &[], &accounts).len(), 3);
+        let all_ids: Vec<_> = accounts.iter().map(|account| account.id.clone()).collect();
+        assert!(resolve_monitored_auto_switch_account_ids("excluded_accounts", &all_ids, &accounts).is_empty());
+        assert!(resolve_monitored_auto_switch_account_ids("selected_accounts", &[], &accounts).is_empty());
+        assert_eq!(resolve_monitored_auto_switch_account_ids("selected_accounts", &excluded, &accounts),
+            HashSet::from(["remote-only".into()]));
+        assert_eq!(resolve_monitored_auto_switch_account_ids("all_accounts", &excluded, &accounts).len(), 3);
+        assert_eq!(normalize_auto_switch_account_scope_mode(" EXCLUDED_ACCOUNTS "), "excluded_accounts");
+        assert_eq!(normalize_auto_switch_account_scope_mode("unknown"), "all_accounts");
     }
 }

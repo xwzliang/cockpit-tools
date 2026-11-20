@@ -454,9 +454,14 @@ independent host keeps its last successfully synced account while both quota poo
 remain above its threshold, then selects an eligible non-excluded account.
 The remote pool does not depend on the local automatic-switch toggle or account scope.
 Configure the local automatic-switch account scope separately to keep the Mac mini
-on premium accounts. Cockpit must remain running and able to reach the remote host.
+on premium accounts. In Antigravity or Codex auto-switch settings, open the account
+scope picker, choose **Exclude accounts on this machine**, and check the accounts
+reserved for remote work. These accounts remain available for manual switching and
+for independently configured remote pools. An empty exclusion list permits every
+account; excluding every account pauses local automatic switching. Cockpit must
+remain running and able to reach the remote host.
 
-Exclusions also apply to manual sync and follow-local sync. If all allowed accounts
+Remote-host exclusions also apply to manual sync and follow-local sync. If all allowed accounts
 are unavailable or below threshold, no account is sent; there is no fallback to an
 excluded account. The existing remote account remains in place until a usable account
 is available. Remote account tracking uses the last verified Cockpit SSH sync;

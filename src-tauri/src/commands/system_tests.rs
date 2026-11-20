@@ -373,3 +373,20 @@
         assert_eq!(config.codex_quota_alert_primary_threshold, 15);
         assert_eq!(config.codex_quota_alert_secondary_threshold, 25);
     }
+
+    #[test]
+    fn local_account_exclusions_survive_config_patch_and_roundtrip() {
+        let mut config = UserConfig::default();
+        let updates = serde_json::json!({
+            "auto_switch_account_scope_mode": " EXCLUDED_ACCOUNTS ",
+            "auto_switch_selected_account_ids": [" remote-only ", "remote-only", ""],
+            "codex_auto_switch_account_scope_mode": "excluded_accounts",
+            "codex_auto_switch_selected_account_ids": ["low-tier"]
+        }).as_object().unwrap().clone();
+        apply_general_config_updates(&mut config, &updates).unwrap();
+        let restored: UserConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(restored.auto_switch_account_scope_mode, "excluded_accounts");
+        assert_eq!(restored.auto_switch_selected_account_ids, vec!["remote-only"]);
+        assert_eq!(restored.codex_auto_switch_account_scope_mode, "excluded_accounts");
+        assert_eq!(restored.codex_auto_switch_selected_account_ids, vec!["low-tier"]);
+    }

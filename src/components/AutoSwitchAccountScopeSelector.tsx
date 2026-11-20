@@ -10,7 +10,7 @@ import './AutoSwitchAccountScopeSelector.css';
 
 const UNGROUPED_ACCOUNT_GROUP_FILTER_KEY = '__ungrouped__';
 
-export type AutoSwitchAccountScopeMode = 'all_accounts' | 'selected_accounts';
+export type AutoSwitchAccountScopeMode = 'all_accounts' | 'selected_accounts' | 'excluded_accounts';
 
 export interface AutoSwitchScopeAccount {
   id: string;
@@ -225,7 +225,7 @@ export function AutoSwitchAccountScopeSelector({
   }, [partiallyVisibleSelected]);
 
   useEffect(() => {
-    if (mode !== 'selected_accounts') {
+    if (mode === 'all_accounts') {
       setDialogOpen(false);
     }
   }, [mode]);
@@ -268,6 +268,11 @@ export function AutoSwitchAccountScopeSelector({
       ? t('settings.general.autoSwitchAccountScopeAllSummary', {
           total: accounts.length,
         })
+      : mode === 'excluded_accounts'
+        ? t('settings.general.autoSwitchAccountScopeExcludedSummary', '{{excluded}} of {{total}} accounts excluded on this machine', {
+            excluded: availableSelectedAccountIds.length,
+            total: accounts.length,
+          })
       : t('settings.general.autoSwitchAccountScopeSummary', {
           selected: availableSelectedAccountIds.length,
           total: accounts.length,
@@ -279,6 +284,9 @@ export function AutoSwitchAccountScopeSelector({
         panelMode === 'dialog' ? 'settings-account-scope-panel--dialog' : ''
       }`}
     >
+      {mode === 'excluded_accounts' && (
+        <p>{t('settings.general.autoSwitchAccountScopeExcludedHint', 'Checked accounts will not be chosen by automatic switching on this machine. Manual switching and remote host pools are unchanged. Uncheck all to allow every account.')}</p>
+      )}
       <div className="settings-account-scope-toolbar">
         <label className="settings-account-scope-select-all">
           <input
@@ -405,9 +413,16 @@ export function AutoSwitchAccountScopeSelector({
             >
               {t('settings.general.autoSwitchAccountScopeSelected')}
             </button>
+            <button
+              type="button"
+              className={`btn btn-secondary ${mode === 'excluded_accounts' ? 'is-active' : ''}`}
+              onClick={() => onModeChange('excluded_accounts')}
+            >
+              {t('settings.general.autoSwitchAccountScopeExcluded', 'Exclude accounts on this machine')}
+            </button>
           </div>
 
-          {mode === 'selected_accounts' && renderSelectionPanel('inline')}
+          {mode !== 'all_accounts' && renderSelectionPanel('inline')}
         </>
       )}
 
@@ -449,9 +464,16 @@ export function AutoSwitchAccountScopeSelector({
                 >
                   {t('settings.general.autoSwitchAccountScopeSelected')}
                 </button>
+                <button
+                  type="button"
+                  className={`btn btn-secondary ${mode === 'excluded_accounts' ? 'is-active' : ''}`}
+                  onClick={() => onModeChange('excluded_accounts')}
+                >
+                  {t('settings.general.autoSwitchAccountScopeExcluded', 'Exclude accounts on this machine')}
+                </button>
               </div>
 
-              {mode === 'selected_accounts' ? (
+              {mode !== 'all_accounts' ? (
                 renderSelectionPanel('dialog')
               ) : (
                 <div className="settings-account-scope-dialog-all-accounts-hint">

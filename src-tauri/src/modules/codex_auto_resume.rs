@@ -1027,7 +1027,7 @@ pub fn get_earliest_codex_quota_resets_at() -> (Option<i64>, Option<i64>, bool, 
         &cfg.codex_auto_switch_account_scope_mode,
     );
     let monitored_account_ids: Option<std::collections::HashSet<String>> = if cfg.codex_auto_switch_enabled
-        && account_scope_mode == "selected"
+        && account_scope_mode != "all_accounts"
     {
         Some(
             crate::modules::codex_account::resolve_monitored_auto_switch_account_ids(
@@ -1683,7 +1683,7 @@ pub async fn check_and_auto_switch_for_earlier_reset(app: &AppHandle) -> Result<
         &cfg.codex_auto_switch_account_scope_mode,
     );
     let monitored_account_ids = if cfg.codex_auto_switch_enabled
-        && account_scope_mode == "selected"
+        && account_scope_mode != "all_accounts"
     {
         crate::modules::codex_account::resolve_monitored_auto_switch_account_ids(
             &account_scope_mode,

@@ -293,10 +293,10 @@ pub struct UserConfig {
     /// 自动切号指定模型分组（分组 ID）
     #[serde(default = "default_auto_switch_selected_group_ids")]
     pub auto_switch_selected_group_ids: Vec<String>,
-    /// 自动切号账号范围模式：all_accounts | selected_accounts
+    /// 自动切号账号范围模式：all_accounts | selected_accounts | excluded_accounts
     #[serde(default = "default_auto_switch_account_scope_mode")]
     pub auto_switch_account_scope_mode: String,
-    /// 自动切号指定账号（账号 ID）
+    /// 自动切号指定账号（账号 ID）；excluded_accounts 模式下为排除列表
     #[serde(default = "default_auto_switch_selected_account_ids")]
     pub auto_switch_selected_account_ids: Vec<String>,
     /// 是否启用 Codex 自动切号
@@ -308,10 +308,10 @@ pub struct UserConfig {
     /// Codex secondary_window 自动切号阈值（百分比）
     #[serde(default = "default_codex_auto_switch_secondary_threshold")]
     pub codex_auto_switch_secondary_threshold: i32,
-    /// Codex 自动切号账号范围模式：all_accounts | selected_accounts
+    /// Codex 自动切号账号范围模式：all_accounts | selected_accounts | excluded_accounts
     #[serde(default = "default_codex_auto_switch_account_scope_mode")]
     pub codex_auto_switch_account_scope_mode: String,
-    /// Codex 自动切号指定账号（账号 ID）
+    /// Codex 自动切号指定账号（账号 ID）；excluded_accounts 模式下为排除列表
     #[serde(default = "default_codex_auto_switch_selected_account_ids")]
     pub codex_auto_switch_selected_account_ids: Vec<String>,
     /// 是否启用 Codex 受限中断任务自动恢复

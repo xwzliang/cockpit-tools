@@ -387,9 +387,11 @@ const getCurrentAccountRefreshPlatformForType = (
 const normalizeAutoSwitchAccountScopeMode = (
   value?: string | null,
 ): AutoSwitchAccountScopeMode =>
-  value === AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
-    ? AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
-    : AUTO_SWITCH_SCOPE_ALL_ACCOUNTS;
+  value === 'excluded_accounts'
+    ? 'excluded_accounts'
+    : value === AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
+      ? AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
+      : AUTO_SWITCH_SCOPE_ALL_ACCOUNTS;
 
 export function QuickSettingsPopover({ type }: QuickSettingsPopoverProps) {
   const { t } = useTranslation();

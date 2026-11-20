@@ -1087,7 +1087,9 @@ fn sanitize_startup_wakeup_delay_seconds(raw: i32) -> i32 {
 }
 
 fn normalize_auto_switch_account_scope_mode(raw: &str) -> String {
-    if raw.trim().to_lowercase() == AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
+    if raw.trim().eq_ignore_ascii_case("excluded_accounts") {
+        "excluded_accounts".to_string()
+    } else if raw.trim().to_lowercase() == AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED {
         AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED.to_string()
     } else {
         AUTO_SWITCH_ACCOUNT_SCOPE_ALL.to_string()

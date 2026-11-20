@@ -362,9 +362,11 @@ const generateReportToken = () => {
 const normalizeAutoSwitchAccountScopeMode = (
   value?: string | null,
 ): AutoSwitchAccountScopeMode =>
-  value === AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
-    ? AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
-    : AUTO_SWITCH_SCOPE_ALL_ACCOUNTS;
+  value === 'excluded_accounts'
+    ? 'excluded_accounts'
+    : value === AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
+      ? AUTO_SWITCH_SCOPE_SELECTED_ACCOUNTS
+      : AUTO_SWITCH_SCOPE_ALL_ACCOUNTS;
 
 const toCurrentAccountRefreshMinutesStringMap = (
   map: CurrentAccountRefreshMinutesMap,
