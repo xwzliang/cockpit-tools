@@ -2370,20 +2370,23 @@ export function DashboardPage({
               <button
                 key={pool.serverId}
                 type="button"
-                className={`mini-remote-switch-btn remote-pool-color-${pool.colorIndex}`}
+                className={`mini-icon-btn mini-remote-switch-btn remote-pool-color-${pool.colorIndex}`}
                 onClick={() => void handleSwitchAgRemotePool(pool.serverId, account.id)}
                 disabled={isSwitchingRemote}
                 title={t('accounts.actions.switchRemotePool', {
                   server: pool.serverName,
                   defaultValue: 'Switch {{server}} to this account',
                 })}
+                aria-label={t('accounts.actions.switchRemotePool', {
+                  server: pool.serverName,
+                  defaultValue: 'Switch {{server}} to this account',
+                })}
               >
                 {isSwitchingRemote ? (
-                  <RotateCw size={11} className="loading-spinner" />
+                  <RotateCw size={14} className="loading-spinner" />
                 ) : (
-                  <Play size={11} />
+                  <Play size={14} />
                 )}
-                <span>{pool.serverName}</span>
               </button>
             );
           })}

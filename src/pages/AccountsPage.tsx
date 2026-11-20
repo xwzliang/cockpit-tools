@@ -3321,13 +3321,16 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                       server: pool.serverName,
                       defaultValue: 'Switch {{server}} to this account',
                     })}
+                    aria-label={t('accounts.actions.switchRemotePool', {
+                      server: pool.serverName,
+                      defaultValue: 'Switch {{server}} to this account',
+                    })}
                   >
                     {isSwitchingRemote ? (
-                      <RefreshCw size={12} className="loading-spinner" />
+                      <RefreshCw size={14} className="loading-spinner" />
                     ) : (
-                      <Play size={12} />
+                      <Play size={14} />
                     )}
-                    <span>{pool.serverName}</span>
                   </button>
                 )
               })}
@@ -4046,13 +4049,16 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                       server: pool.serverName,
                       defaultValue: 'Switch {{server}} to this account',
                     })}
+                    aria-label={t('accounts.actions.switchRemotePool', {
+                      server: pool.serverName,
+                      defaultValue: 'Switch {{server}} to this account',
+                    })}
                   >
                     {isSwitchingRemote ? (
-                      <RefreshCw size={12} className="loading-spinner" />
+                      <RefreshCw size={14} className="loading-spinner" />
                     ) : (
-                      <Play size={12} />
+                      <Play size={14} />
                     )}
-                    <span>{pool.serverName}</span>
                   </button>
                 )
               })}

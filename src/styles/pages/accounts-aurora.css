@@ -775,24 +775,9 @@
 
 .accounts-page .card-action-btn.remote-pool-switch-btn,
 .accounts-page .action-btn.remote-pool-switch-btn {
-  width: auto;
-  min-width: 28px;
-  max-width: 120px;
-  padding: 0 8px;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 999px;
   background: var(--remote-pool-mini-bg, rgba(124, 58, 237, 0.14));
   color: var(--remote-pool-mini-text, #6d28d9);
   border: 1px solid var(--remote-pool-mini-border, rgba(124, 58, 237, 0.34));
-  white-space: nowrap;
-}
-
-.accounts-page .card-action-btn.remote-pool-switch-btn span,
-.accounts-page .action-btn.remote-pool-switch-btn span {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .accounts-page .card-action-btn.remote-pool-switch-btn:hover:not(:disabled),
