@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
@@ -7,6 +7,7 @@ import {
   Pencil,
   PlugZap,
   RefreshCw,
+  Settings2,
   Server,
   Trash2,
   X,
@@ -131,6 +132,8 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
   const selectServer = (id: string | null) => selectPlatformServer(id, platform);
   const platformEmptyForm = { ...emptyForm, syncOnSwitch: platform === "codex", syncOnAntigravitySwitch: platform === "antigravity" };
   const [form, setForm] = useState<FormState>(platformEmptyForm);
+  const formRef = useRef<HTMLFormElement>(null);
+  const accountPoolRef = useRef<HTMLFieldSetElement>(null);
   const [configHosts, setConfigHosts] = useState<string[]>([]);
   const [customAlias, setCustomAlias] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -180,6 +183,15 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
       if (unlisten) unlisten();
     };
   }, [applySyncResult, t]);
+
+  const editServer = (server: SshServer, accountPool = false) => {
+    setForm(formFromServer(server));
+    setCustomAlias(false);
+    setLocalMessage(null);
+    const target = accountPool ? accountPoolRef.current : formRef.current;
+    target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    target?.focus({ preventScroll: true });
+  };
 
   const handleSubmit = async () => {
     setSaving(true);
@@ -300,6 +312,8 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
 
       <div className="codex-ssh-panel__layout">
         <form
+          ref={formRef}
+          tabIndex={-1}
           className="codex-ssh-panel__form"
           onSubmit={(event) => {
             event.preventDefault();
@@ -314,7 +328,7 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
                   : t('codex.ssh.addServer', '添加服务器')}
               </div>
               <h3 className="codex-ssh-panel__form-title">
-                {t('codex.ssh.formLead', '填写远端主机信息')}
+                {form.id ? form.name : t('codex.ssh.formLead', '填写远端主机信息')}
               </h3>
             </div>
             <div className="codex-ssh-panel__form-header-actions">
@@ -517,8 +531,11 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
               </span>
             </label>
 
-            <fieldset className="codex-ssh-panel__field">
-              <legend>{t('antigravity.ssh.accountPolicy', 'Antigravity accounts on this remote machine')}</legend>
+            <fieldset ref={accountPoolRef} tabIndex={-1} className="codex-ssh-panel__field">
+              <legend>
+                {t('antigravity.ssh.accountPolicy', 'Antigravity accounts on this remote machine')}
+                {form.id && ` · ${form.name}`}
+              </legend>
               <select className="form-input" value={form.antigravityAccountPolicy.mode}
                 onChange={(event) => setForm({ ...form, antigravityAccountPolicy: {
                   ...form.antigravityAccountPolicy,
@@ -769,11 +786,21 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
                       <span>{t('antigravity.ssh.syncAntigravityShort', '同步 Antigravity')}</span>
                     </button>
                     <button
+                      className="btn btn-secondary codex-ssh-panel__account-pool"
+                      type="button"
+                      disabled={saving}
+                      title={t('antigravity.ssh.editAccountPool', 'Edit Antigravity account pool')}
+                      onClick={() => editServer(server, true)}
+                    >
+                      <Settings2 size={14} />
+                      <span>{t('antigravity.ssh.accountPool', 'Account pool')}</span>
+                    </button>
+                    <button
                       className="btn btn-secondary icon-only"
                       type="button"
                       title={t('common.edit', '编辑')}
                       aria-label={t('common.edit', '编辑')}
-                      onClick={() => setForm(formFromServer(server))}
+                      onClick={() => editServer(server)}
                     >
                       <Pencil size={14} />
                     </button>

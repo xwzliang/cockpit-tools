@@ -2809,7 +2809,7 @@
     grid-template-columns: 1fr;
   }
 
-  .codex-ssh-panel__item-actions .btn:not(.icon-only) span {
+  .codex-ssh-panel__item-actions .btn:not(.icon-only):not(.codex-ssh-panel__account-pool) span {
     display: none;
   }
 }

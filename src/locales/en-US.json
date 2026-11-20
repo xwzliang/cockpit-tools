@@ -2340,6 +2340,8 @@
       "deleteSuccess": "Task removed from list"
     },
     "ssh": {
+      "editAccountPool": "Edit Antigravity account pool",
+      "accountPool": "Account pool",
       "accountPolicy": "Antigravity accounts on this remote machine",
       "followLocal": "Follow the local account",
       "independent": "Independent account pool",

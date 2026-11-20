@@ -2378,6 +2378,8 @@
       "deleteSuccess": "任务已从列表中移除"
     },
     "ssh": {
+      "editAccountPool": "编辑 Antigravity 账号池",
+      "accountPool": "账号池",
       "accountPolicy": "此远程主机的 Antigravity 账号",
       "followLocal": "跟随本机账号",
       "independent": "独立账号池",

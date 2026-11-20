@@ -443,7 +443,7 @@ Due to macOS security mechanisms, apps not downloaded from the App Store may tri
 
 ### Independent Antigravity accounts over SSH
 
-In Antigravity settings, open **SSH sync**, edit the remote host, and choose
+In Antigravity settings, open **SSH sync**, click **Account pool** on a saved host, and choose
 **Independent account pool**. Exclude any accounts reserved for the local machine
 (for example, the Mac mini's premium subscription), set the remote quota threshold,
 enable **Automatic Antigravity sync / remote rotation**, and save. **Sync Antigravity**
