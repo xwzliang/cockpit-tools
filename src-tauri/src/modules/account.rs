@@ -1948,6 +1948,7 @@ async fn run_auto_switch_if_needed_inner() -> Result<Option<Account>, String> {
         modules::websocket::broadcast_account_switched(&switched.id, &switched.email);
         switched
     };
+    crate::commands::account::sync_selected_server_after_antigravity_switch_logged(&switched).await;
     modules::websocket::broadcast_data_changed("auto_switch");
     if let Some(app) = crate::get_app_handle() {
         let resume_app = app.clone();

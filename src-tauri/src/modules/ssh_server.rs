@@ -1163,13 +1163,18 @@ with tempfile.TemporaryDirectory(prefix='cockpit-keychain-') as root:
     folder=pathlib.Path(root)
     label='com.cockpit.antigravity-auth.' + str(uuid.uuid4())
     runner=folder/'runner.py'
-    runner.write_text('''import subprocess,sys,pathlib,json
+    runner.write_text(r'''import subprocess,sys,pathlib,json
 args=sys.argv[2:]
 # Match the local macOS switch: replace the item rather than modifying its ACL.
 subprocess.run([args[0],"delete-generic-password","-s","gemini","-a","antigravity"],capture_output=True,text=True)
 result=subprocess.run(args,capture_output=True,text=True)
-pathlib.Path(sys.argv[1]).write_text(json.dumps({"code":result.returncode,"error":result.stderr}))
-sys.exit(result.returncode)
+code,error=result.returncode,result.stderr
+if code == 0:
+    readback=subprocess.run([args[0],"find-generic-password","-s","gemini","-a","antigravity","-w"],capture_output=True,text=True)
+    if readback.returncode or readback.stdout.rstrip("\n") != args[args.index("-w")+1]:
+        code,error=1,"Keychain read-back did not match the synced credential"
+pathlib.Path(sys.argv[1]).write_text(json.dumps({"code":code,"error":error}))
+sys.exit(code)
 ''')
     runner.chmod(0o700)
     result=folder/'result'
@@ -1210,8 +1215,10 @@ fn build_antigravity_upload_script(bundle: &AntigravityAccountProjectionBundle) 
     }
     let keyring_payload_b64 = STANDARD.encode(bundle.keyring_payload.as_bytes());
 
+    let linux_keyring_script = include_str!("antigravity_ssh_keyring.py");
     let script = format!(
         r#"set -eu
+umask 077
 antigravity_home=$1
 case "$antigravity_home" in
   "~") antigravity_home="$HOME" ;;
@@ -1254,47 +1261,29 @@ done
 
 __COCKPIT_MACOS_KEYCHAIN__
 
-# Try updating Linux Secret Service (GNOME Keyring / secret-tool / python dbus) if active user bus exists
-USER_BUS="/run/user/$(id -u)/bus"
-if [ -S "$USER_BUS" ]; then
+if [ "$(uname -s)" = Linux ]; then
+  USER_BUS="/run/user/$(id -u)/bus"
+  if [ ! -S "$USER_BUS" ]; then
+    printf 'Linux keyring unavailable: log in to the remote desktop to start its session bus.\n' >&2
+    exit 6
+  fi
   export DBUS_SESSION_BUS_ADDRESS="unix:path=$USER_BUS"
-  payload_content=$(printf '%s' '{keyring_payload_b64}' | (base64 -d 2>/dev/null || base64 -D 2>/dev/null || true))
-  if command -v secret-tool >/dev/null 2>&1; then
-    printf '%s' "$payload_content" | secret-tool store --label=gemini service gemini username antigravity 2>/dev/null || true
-  elif command -v python3 >/dev/null 2>&1; then
-    printf '%s' "$payload_content" | python3 -c '
-import os, sys
-try:
-    import dbus
-    uid = os.getuid()
-    bus_path = f"/run/user/{{uid}}/bus"
-    if not os.path.exists(bus_path):
-        sys.exit(0)
-    bus = dbus.bus.BusConnection(f"unix:path={{bus_path}}")
-    ss = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets")
-    ss_iface = dbus.Interface(ss, "org.freedesktop.Secret.Service")
-    session_path = ss_iface.OpenSession("plain", dbus.String("", variant_level=1))[1]
-    raw_payload = sys.stdin.read().strip().encode("utf-8")
-    default_coll = bus.get_object("org.freedesktop.secrets", "/org/freedesktop/secrets/aliases/default")
-    coll_iface = dbus.Interface(default_coll, "org.freedesktop.Secret.Collection")
-    props = {{
-        "org.freedesktop.Secret.Item.Label": dbus.String("gemini", variant_level=1),
-        "org.freedesktop.Secret.Item.Attributes": dbus.Dictionary({{
-            "service": "gemini",
-            "username": "antigravity",
-            "xdg:schema": "org.freedesktop.Secret.Generic",
-        }}, signature="ss", variant_level=1),
-    }}
-    secret_struct = (
-        dbus.ObjectPath(session_path),
-        dbus.Array([], signature="y"),
-        dbus.Array(list(raw_payload), signature="y"),
-        "text/plain; charset=utf-8",
-    )
-    coll_iface.CreateItem(props, secret_struct, True)
-except Exception:
-    sys.exit(0)
-' 2>/dev/null || true
+  payload_file="$tmp_dir/keyring-payload"
+  printf '%s' '{keyring_payload_b64}' | base64 -d > "$payload_file"
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import dbus' 2>/dev/null; then
+    cat > "$tmp_dir/keyring.py" <<'__COCKPIT_LINUX_KEYRING__'
+{linux_keyring_script}
+__COCKPIT_LINUX_KEYRING__
+    python3 "$tmp_dir/keyring.py" < "$payload_file"
+  elif command -v secret-tool >/dev/null 2>&1; then
+    secret-tool store --label=gemini service gemini username antigravity < "$payload_file"
+    if [ "$(secret-tool lookup service gemini username antigravity)" != "$(cat "$payload_file")" ]; then
+      printf 'Linux keyring read-back did not match the synced credential.\n' >&2
+      exit 6
+    fi
+  else
+    printf 'Linux keyring sync needs python3-dbus or secret-tool on the remote host.\n' >&2
+    exit 6
   fi
 fi
 
@@ -1443,8 +1432,11 @@ main_pid=""
 main_exe=""
 main_display=""
 main_xauth=""
+main_wayland=""
+main_runtime=""
+main_dbus=""
 
-for p in $(pgrep -u "$(id -u)" -f antigravity 2>/dev/null || true); do
+for p in $(pgrep -u "$(id -u)" -x antigravity 2>/dev/null || true); do
   [ -d "/proc/$p" ] || continue
   exe=$(readlink -f "/proc/$p/exe" 2>/dev/null || true)
   cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || true)
@@ -1455,8 +1447,11 @@ for p in $(pgrep -u "$(id -u)" -f antigravity 2>/dev/null || true); do
         *)
           main_pid="$p"
           main_exe="$exe"
-          main_display=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep '^DISPLAY=' | head -n 1 || true)
-          main_xauth=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep '^XAUTHORITY=' | head -n 1 || true)
+          main_display=$(tr '\0' '\n' < "/proc/$p/environ" | sed -n 's/^DISPLAY=//p')
+          main_xauth=$(tr '\0' '\n' < "/proc/$p/environ" | sed -n 's/^XAUTHORITY=//p')
+          main_wayland=$(tr '\0' '\n' < "/proc/$p/environ" | sed -n 's/^WAYLAND_DISPLAY=//p')
+          main_runtime=$(tr '\0' '\n' < "/proc/$p/environ" | sed -n 's/^XDG_RUNTIME_DIR=//p')
+          main_dbus=$(tr '\0' '\n' < "/proc/$p/environ" | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p')
           break
           ;;
       esac
@@ -1464,12 +1459,18 @@ for p in $(pgrep -u "$(id -u)" -f antigravity 2>/dev/null || true); do
   esac
 done
 
-all_pids=$(pgrep -u "$(id -u)" -f "antigravity|language_server" 2>/dev/null || true)
-if [ -z "$all_pids" ] && [ -z "$main_pid" ]; then
+if [ -z "$main_pid" ]; then
   printf 'no-antigravity-process\n'
   exit 0
 fi
 
+# Terminate only this installation's desktop processes.
+all_pids=""
+for p in $(pgrep -u "$(id -u)" -x antigravity 2>/dev/null || true); do
+  if [ "$(readlink -f "/proc/$p/exe" 2>/dev/null || true)" = "$main_exe" ]; then
+    all_pids="$all_pids $p"
+  fi
+done
 for p in $all_pids; do
   kill -TERM "$p" 2>/dev/null || true
 done
@@ -1483,9 +1484,18 @@ done
 sleep 1
 
 if [ -n "$main_exe" ] && [ -x "$main_exe" ]; then
-  [ -n "$main_display" ] && eval "export $main_display"
-  [ -n "$main_xauth" ] && eval "export $main_xauth"
-  "$main_exe" </dev/null >/dev/null 2>&1 &
+  [ -n "$main_display" ] && export DISPLAY="$main_display"
+  [ -n "$main_xauth" ] && export XAUTHORITY="$main_xauth"
+  [ -n "$main_wayland" ] && export WAYLAND_DISPLAY="$main_wayland"
+  [ -n "$main_runtime" ] && export XDG_RUNTIME_DIR="$main_runtime"
+  [ -n "$main_dbus" ] && export DBUS_SESSION_BUS_ADDRESS="$main_dbus"
+  nohup "$main_exe" </dev/null >/dev/null 2>&1 &
+  launched=$!
+  sleep 2
+  if [ "$(readlink -f "/proc/$launched/exe" 2>/dev/null)" != "$main_exe" ]; then
+    printf 'antigravity_restart_failed: Linux desktop process did not stay running\n' >&2
+    exit 1
+  fi
   printf 'desktop-relaunched\n'
   exit 0
 fi
@@ -1930,7 +1940,7 @@ compile(writers[0], 'generated-keychain-writer.py', 'exec')
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         let fixtures = [
             ("uname", "#!/bin/sh\necho Darwin\n"),
-            ("security", "#!/bin/sh\n[ \"$COCKPIT_GUI_TEST\" = 1 ] || exit 1\n[ \"$2\" != -U ] || exit 1\nprintf '%s\\n' \"$@\" > \"$HOME/gui-keychain-call\"\n"),
+            ("security", "#!/bin/sh\n[ \"$COCKPIT_GUI_TEST\" = 1 ] || exit 1\n[ \"$2\" != -U ] || exit 1\nif [ \"$1\" = find-generic-password ]; then\n  sed -n '/^go-keyring-base64:/p' \"$HOME/gui-keychain-call\"\n  exit\nfi\nprintf '%s\\n' \"$@\" > \"$HOME/gui-keychain-call\"\n"),
             ("launchctl", "#!/usr/bin/python3\nimport sys,plistlib,subprocess,os\nif sys.argv[1]=='bootstrap':\n p=plistlib.load(open(sys.argv[-1],'rb'))\n sys.exit(subprocess.run(p['ProgramArguments'],env=dict(os.environ,COCKPIT_GUI_TEST='1')).returncode)\n")
         ];
         for (name, text) in fixtures {
@@ -1958,7 +1968,7 @@ compile(writers[0], 'generated-keychain-writer.py', 'exec')
         let dir = std::env::temp_dir().join(format!("cockpit-macos-sync-{}", Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("bin")).unwrap();
         std::fs::write(dir.join("bin/uname"), "#!/bin/sh\necho Darwin\n").unwrap();
-        std::fs::write(dir.join("bin/security"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/keychain-call\"\n").unwrap();
+        std::fs::write(dir.join("bin/security"), "#!/bin/sh\nif [ \"$1\" = find-generic-password ]; then\n  sed -n '/^go-keyring-base64:/p' \"$HOME/keychain-call\"\n  exit\nfi\nprintf '%s\\n' \"$@\" > \"$HOME/keychain-call\"\n").unwrap();
         std::fs::write(dir.join("bin/launchctl"), "#!/usr/bin/python3\nimport sys,plistlib,subprocess\nif sys.argv[1]=='bootstrap':\n p=plistlib.load(open(sys.argv[-1],'rb'))\n sys.exit(subprocess.run(p['ProgramArguments']).returncode)\n").unwrap();
         #[cfg(unix)] {
             use std::os::unix::fs::PermissionsExt;
@@ -2167,7 +2177,7 @@ compile(writers[0], 'generated-keychain-writer.py', 'exec')
     fn antigravity_reload_script_contains_process_detection_and_relaunch() {
         let script = reload_antigravity_script();
         assert!(script.contains("antigravity"));
-        assert!(script.contains("language_server"));
+        assert!(script.contains("DBUS_SESSION_BUS_ADDRESS="));
         assert!(script.contains("desktop-relaunched"));
         assert!(script.contains("processes-terminated"));
         assert!(script.contains("no-antigravity-process"));

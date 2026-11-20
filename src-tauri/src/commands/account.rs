@@ -556,7 +556,7 @@ pub(crate) async fn switch_account_legacy_antigravity(
     Ok(account)
 }
 
-async fn sync_selected_server_after_antigravity_switch_logged(account: &models::Account) {
+pub(crate) async fn sync_selected_server_after_antigravity_switch_logged(account: &models::Account) {
     if let Some(ssh_sync) =
         modules::ssh_server::sync_selected_server_after_antigravity_switch(account).await
     {

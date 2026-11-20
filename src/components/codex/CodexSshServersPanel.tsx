@@ -199,22 +199,29 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
     try {
       const draft = draftFromForm(form);
       await upsertServer(draft);
-      // Keep the edited host as the default for manual sync; Codex auto-sync targets all enabled hosts.
-      if (platform === "codex" ? draft.sync_on_codex_switch : draft.sync_on_antigravity_switch) {
-        const list = useSshServerStore.getState().servers;
-        const matched =
-          list.find(
+      const list = useSshServerStore.getState().servers;
+      const matched = draft.id
+        ? list.find((server) => server.id === draft.id)
+        : list.find(
             (server) =>
               server.host === draft.host &&
               server.port === draft.port &&
               server.username === draft.username && server.auth.kind === draft.auth.kind,
-          ) ?? list.find((server) => server.id === draft.id);
-        if (matched) {
-          await selectServer(matched.id);
-        }
+          );
+      const autoSync = platform === 'codex'
+        ? draft.sync_on_codex_switch
+        : draft.sync_on_antigravity_switch;
+      if (matched && autoSync) {
+        await selectServer(matched.id);
       }
       setForm(platformEmptyForm);
-      setLocalMessage({ kind: 'success', text: t('common.saved', '已保存') });
+
+      if (matched && platform === 'antigravity' && autoSync &&
+          draft.antigravity_account_policy?.mode === 'follow_local') {
+        await handleSyncAntigravity(matched.id);
+      } else {
+        setLocalMessage({ kind: 'success', text: t('common.saved', '已保存') });
+      }
     } catch (err) {
       setLocalMessage({ kind: 'error', text: String(err) });
     } finally {
