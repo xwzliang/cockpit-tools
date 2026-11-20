@@ -562,7 +562,7 @@
   z-index: 1;
 }
 
-.accounts-page .accounts-grid .account-card:hover:not(.current) {
+.accounts-page .accounts-grid .account-card:hover:not(.current):not(.remote-pool-active) {
   transform: translateY(-2px);
   box-shadow: var(--shadow-md);
   border-color: var(--border);
@@ -580,6 +580,106 @@
 .accounts-page .account-card.current:hover {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px var(--primary-light), var(--shadow-md);
+}
+
+.remote-pool-color-0 {
+  --remote-pool-accent: #7c3aed;
+  --remote-pool-ring: rgba(124, 58, 237, 0.22);
+  --remote-pool-bg: rgba(124, 58, 237, 0.08);
+  --remote-pool-tag-bg: #7c3aed;
+  --remote-pool-mini-bg: rgba(124, 58, 237, 0.14);
+  --remote-pool-mini-border: rgba(124, 58, 237, 0.34);
+  --remote-pool-mini-text: #6d28d9;
+}
+
+.remote-pool-color-1 {
+  --remote-pool-accent: #0d9488;
+  --remote-pool-ring: rgba(13, 148, 136, 0.22);
+  --remote-pool-bg: rgba(13, 148, 136, 0.08);
+  --remote-pool-tag-bg: #0d9488;
+  --remote-pool-mini-bg: rgba(13, 148, 136, 0.14);
+  --remote-pool-mini-border: rgba(13, 148, 136, 0.34);
+  --remote-pool-mini-text: #0f766e;
+}
+
+.remote-pool-color-2 {
+  --remote-pool-accent: #d97706;
+  --remote-pool-ring: rgba(217, 119, 6, 0.22);
+  --remote-pool-bg: rgba(217, 119, 6, 0.08);
+  --remote-pool-tag-bg: #d97706;
+  --remote-pool-mini-bg: rgba(217, 119, 6, 0.14);
+  --remote-pool-mini-border: rgba(217, 119, 6, 0.34);
+  --remote-pool-mini-text: #b45309;
+}
+
+.remote-pool-color-3 {
+  --remote-pool-accent: #e11d48;
+  --remote-pool-ring: rgba(225, 29, 72, 0.22);
+  --remote-pool-bg: rgba(225, 29, 72, 0.08);
+  --remote-pool-tag-bg: #e11d48;
+  --remote-pool-mini-bg: rgba(225, 29, 72, 0.14);
+  --remote-pool-mini-border: rgba(225, 29, 72, 0.34);
+  --remote-pool-mini-text: #be123c;
+}
+
+[data-theme="dark"] .remote-pool-color-0 {
+  --remote-pool-accent: #a78bfa;
+  --remote-pool-ring: rgba(167, 139, 250, 0.28);
+  --remote-pool-bg: rgba(139, 92, 246, 0.22);
+  --remote-pool-tag-bg: #7c3aed;
+  --remote-pool-mini-bg: rgba(167, 139, 250, 0.18);
+  --remote-pool-mini-border: rgba(167, 139, 250, 0.38);
+  --remote-pool-mini-text: #c4b5fd;
+}
+
+[data-theme="dark"] .remote-pool-color-1 {
+  --remote-pool-accent: #2dd4bf;
+  --remote-pool-ring: rgba(45, 212, 191, 0.28);
+  --remote-pool-bg: rgba(20, 184, 166, 0.22);
+  --remote-pool-tag-bg: #0d9488;
+  --remote-pool-mini-bg: rgba(45, 212, 191, 0.18);
+  --remote-pool-mini-border: rgba(45, 212, 191, 0.38);
+  --remote-pool-mini-text: #5eead4;
+}
+
+[data-theme="dark"] .remote-pool-color-2 {
+  --remote-pool-accent: #fbbf24;
+  --remote-pool-ring: rgba(251, 191, 36, 0.28);
+  --remote-pool-bg: rgba(245, 158, 11, 0.22);
+  --remote-pool-tag-bg: #b45309;
+  --remote-pool-mini-bg: rgba(251, 191, 36, 0.18);
+  --remote-pool-mini-border: rgba(251, 191, 36, 0.38);
+  --remote-pool-mini-text: #fcd34d;
+}
+
+[data-theme="dark"] .remote-pool-color-3 {
+  --remote-pool-accent: #fb7185;
+  --remote-pool-ring: rgba(251, 113, 133, 0.28);
+  --remote-pool-bg: rgba(244, 63, 94, 0.22);
+  --remote-pool-tag-bg: #be123c;
+  --remote-pool-mini-bg: rgba(251, 113, 133, 0.18);
+  --remote-pool-mini-border: rgba(251, 113, 133, 0.38);
+  --remote-pool-mini-text: #fda4af;
+}
+
+.accounts-page .account-card.remote-pool-active:not(.current) {
+  border-color: var(--remote-pool-accent);
+  box-shadow: 0 0 0 2px var(--remote-pool-ring), var(--shadow-md);
+}
+
+.accounts-page .account-card.remote-pool-active::before {
+  opacity: 0;
+}
+
+.accounts-page .account-card.remote-pool-active:not(.current):hover {
+  border-color: var(--remote-pool-accent);
+  box-shadow: 0 0 0 2px var(--remote-pool-ring), var(--shadow-md);
+}
+
+.accounts-page .account-card.current.remote-pool-active,
+.accounts-page .account-card.current.remote-pool-active:hover {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light), 0 0 0 4px var(--remote-pool-ring), var(--shadow-md);
 }
 
 .accounts-page .account-card.selected {
@@ -645,6 +745,32 @@
   font-size: 11px;
   font-weight: 600;
   border-radius: var(--radius-full);
+}
+
+.remote-pool-tag {
+  flex-shrink: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  background: var(--remote-pool-tag-bg, #7c3aed);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+}
+
+.mini-tag.remote-pool {
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0.2px;
+  background: var(--remote-pool-mini-bg, rgba(124, 58, 237, 0.14));
+  color: var(--remote-pool-mini-text, #6d28d9);
+  border: 1px solid var(--remote-pool-mini-border, rgba(124, 58, 237, 0.34));
 }
 
 .accounts-page .tier-badge,
@@ -934,6 +1060,16 @@
   background: rgba(29, 78, 216, 0.08);
 }
 
+.accounts-page .account-table tr.remote-pool-active:not(.current),
+.accounts-page .account-table tr.remote-pool-active:not(.current) .sticky-action-cell,
+.accounts-page .account-table tr.remote-pool-active:not(.current) .table-action-cell {
+  background: var(--remote-pool-bg);
+}
+
+.accounts-page .account-table tr.remote-pool-active:not(.current) td:first-child {
+  box-shadow: inset 3px 0 0 var(--remote-pool-accent);
+}
+
 @keyframes cardIn {
   from {
     opacity: 0;
@@ -991,6 +1127,12 @@
 
 [data-theme="dark"] .accounts-page .account-table tr.current {
   background: rgba(59, 130, 246, 0.24);
+}
+
+[data-theme="dark"] .accounts-page .account-table tr.remote-pool-active:not(.current),
+[data-theme="dark"] .accounts-page .account-table tr.remote-pool-active:not(.current) .sticky-action-cell,
+[data-theme="dark"] .accounts-page .account-table tr.remote-pool-active:not(.current) .table-action-cell {
+  background: var(--remote-pool-bg);
 }
 
 
@@ -1269,13 +1411,18 @@ html[data-reduced-motion="true"] .accounts-page .card-quota-grid {
 }
 
 html[data-reduced-motion="true"] .accounts-page .accounts-grid .account-card,
-html[data-reduced-motion="true"] .accounts-page .accounts-grid .account-card:hover:not(.current) {
+html[data-reduced-motion="true"] .accounts-page .accounts-grid .account-card:hover:not(.current):not(.remote-pool-active) {
   transform: none;
 }
 
 html[data-reduced-motion="true"] .accounts-page .account-card.current,
 html[data-reduced-motion="true"] .accounts-page .account-card.current:hover {
   box-shadow: 0 0 0 2px var(--primary-light);
+}
+
+html[data-reduced-motion="true"] .accounts-page .account-card.remote-pool-active:not(.current),
+html[data-reduced-motion="true"] .accounts-page .account-card.remote-pool-active:not(.current):hover {
+  box-shadow: 0 0 0 2px var(--remote-pool-ring);
 }
 
 html[data-reduced-motion="true"] .accounts-page .account-card.selected {

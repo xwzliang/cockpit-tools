@@ -1687,6 +1687,7 @@
     },
     "status": {
       "current": "Current",
+      "remotePoolTooltip": "Remote pool: {{server}} ({{host}})",
       "disabled": "Disabled",
       "authInvalid": "Invalid credentials",
       "refreshFailed": "Refresh failed",

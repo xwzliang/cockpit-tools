@@ -131,6 +131,63 @@
   box-shadow: 0 0 0 1px var(--primary);
 }
 
+.cardRemotePool:not(.cardCurrent) {
+  background: var(--compact-remote-bg, rgba(124, 58, 237, 0.08));
+  border-color: var(--compact-remote-accent, #7c3aed);
+  box-shadow: 0 0 0 1px var(--compact-remote-accent, #7c3aed);
+}
+
+.cardRemotePoolColor0 {
+  --compact-remote-accent: #7c3aed;
+  --compact-remote-bg: rgba(124, 58, 237, 0.08);
+}
+
+.cardRemotePoolColor1 {
+  --compact-remote-accent: #0d9488;
+  --compact-remote-bg: rgba(13, 148, 136, 0.08);
+}
+
+.cardRemotePoolColor2 {
+  --compact-remote-accent: #d97706;
+  --compact-remote-bg: rgba(217, 119, 6, 0.08);
+}
+
+.cardRemotePoolColor3 {
+  --compact-remote-accent: #e11d48;
+  --compact-remote-bg: rgba(225, 29, 72, 0.08);
+}
+
+.remotePoolTag {
+  flex-shrink: 0;
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #ffffff;
+  background: #7c3aed;
+}
+
+.remotePoolColor0 {
+  background: #7c3aed;
+}
+
+.remotePoolColor1 {
+  background: #0d9488;
+}
+
+.remotePoolColor2 {
+  background: #d97706;
+}
+
+.remotePoolColor3 {
+  background: #e11d48;
+}
+
 .cardSelected {
   background: rgba(14, 165, 165, 0.08);
   border-color: var(--accent);
@@ -445,6 +502,26 @@
 
 :global([data-theme="dark"]) .cardCurrent {
   background: rgba(59, 130, 246, 0.12);
+}
+
+:global([data-theme="dark"]) .cardRemotePoolColor0 {
+  --compact-remote-accent: #a78bfa;
+  --compact-remote-bg: rgba(139, 92, 246, 0.18);
+}
+
+:global([data-theme="dark"]) .cardRemotePoolColor1 {
+  --compact-remote-accent: #2dd4bf;
+  --compact-remote-bg: rgba(20, 184, 166, 0.18);
+}
+
+:global([data-theme="dark"]) .cardRemotePoolColor2 {
+  --compact-remote-accent: #fbbf24;
+  --compact-remote-bg: rgba(245, 158, 11, 0.18);
+}
+
+:global([data-theme="dark"]) .cardRemotePoolColor3 {
+  --compact-remote-accent: #fb7185;
+  --compact-remote-bg: rgba(244, 63, 94, 0.18);
 }
 
 :global([data-theme="dark"]) .colorPicker,

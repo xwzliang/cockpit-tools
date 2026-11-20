@@ -1687,6 +1687,7 @@
     },
     "status": {
       "current": "当前",
+      "remotePoolTooltip": "远程独立账号池：{{server}} ({{host}})",
       "disabled": "已禁用",
       "authInvalid": "凭证无效",
       "refreshFailed": "刷新失败",

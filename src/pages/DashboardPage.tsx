@@ -89,6 +89,8 @@ import { isAccountPlatform, PlatformId, PLATFORM_PAGE_MAP } from '../types/platf
 import { getPlatformLabel, renderPlatformIcon } from '../utils/platformMeta';
 import { setAntigravityRuntimeTargetFromPlatform } from '../utils/antigravityRuntimeTarget';
 import { useAntigravityRuntimeTarget } from '../hooks/useAntigravityRuntimeTarget';
+import { useAntigravityRemotePools } from '../hooks/useAntigravityRemotePools';
+import { getRemotePoolHighlightClasses } from '../utils/antigravityRemotePools';
 import { ManualHelpIconButton } from '../components/ManualHelpIconButton';
 import { AnnouncementCenter } from '../components/AnnouncementCenter';
 import { isPrivacyModeEnabledByDefault, maskSensitiveValue } from '../utils/privacy';
@@ -296,6 +298,7 @@ export function DashboardPage({
 }: DashboardPageProps) {
   const { t } = useTranslation();
   const antigravityRuntimeTarget = useAntigravityRuntimeTarget();
+  const agRemotePoolUsageMap = useAntigravityRemotePools();
 
   const [tagModalState, setTagModalState] = React.useState<{ accountId: string; platform: PlatformId | 'codebuddy_cn'; tags: string[] } | null>(null);
   const [dashboardCardCollapse, setDashboardCardCollapse] = React.useState<DashboardCardCollapseState>({
@@ -2265,6 +2268,7 @@ export function DashboardPage({
 
     const presentation = buildAntigravityAccountPresentation(account, agDisplayGroups, t);
     const quotaDisplayItems = presentation.quotaItems.slice(0, 4);
+    const remotePoolBadges = agRemotePoolUsageMap[account.id] ?? [];
 
     return (
       <div className="account-mini-card">
@@ -2273,6 +2277,19 @@ export function DashboardPage({
             <span className="account-email" title={maskAccountText(presentation.displayName)}>
               {maskAccountText(presentation.displayName)}
             </span>
+            {remotePoolBadges.map((remote) => (
+              <span
+                key={remote.serverId}
+                className={`remote-pool-tag remote-pool-color-${remote.colorIndex}`}
+                title={t('accounts.status.remotePoolTooltip', {
+                  server: remote.serverName,
+                  host: remote.host,
+                  defaultValue: 'Remote pool: {{server}} ({{host}})',
+                })}
+              >
+                {remote.serverName}
+              </span>
+            ))}
             <span className={`tier-badge ${presentation.planClass}`}>{presentation.planLabel}</span>
           </div>
         </div>
@@ -2697,6 +2714,7 @@ export function DashboardPage({
     accounts: T[],
     renderAccount: (account: T) => React.ReactNode,
     currentAccountId?: string | null,
+    getExtraClassName?: (account: T) => string,
   ) => {
     const orderedAccounts = currentAccountId
       ? [
@@ -2709,9 +2727,12 @@ export function DashboardPage({
       <div className="dashboard-account-list">
         {orderedAccounts.map((account) => {
           const isCurrent = Boolean(currentAccountId) && account.id === currentAccountId;
+          const extraClassName = getExtraClassName ? getExtraClassName(account) : '';
           return (
             <div
-              className={`dashboard-account-list-item${isCurrent ? ' current' : ''}`}
+              className={['dashboard-account-list-item', isCurrent ? 'current' : '', extraClassName]
+                .filter(Boolean)
+                .join(' ')}
               key={account.id}
             >
               {renderAccount(account)}
@@ -2726,7 +2747,12 @@ export function DashboardPage({
     switch (platformId) {
       case 'antigravity':
       case 'antigravity_ide':
-        return renderAccountList(agAccounts, renderAgAccountContent, agCurrentId);
+        return renderAccountList(
+          agAccounts,
+          renderAgAccountContent,
+          agCurrentId,
+          (account) => getRemotePoolHighlightClasses(agRemotePoolUsageMap[account.id]),
+        );
       case 'codex':
         return renderAccountList(codexAccounts, renderCodexAccountContent, codexCurrentId);
       case 'claude_manager':

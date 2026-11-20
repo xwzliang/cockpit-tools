@@ -119,6 +119,8 @@ import {
   writeAccountsOverviewFilterField,
 } from '../utils/accountsOverviewFilterPersistence'
 import { useAntigravityRuntimeTarget } from '../hooks/useAntigravityRuntimeTarget'
+import { useAntigravityRemotePools } from '../hooks/useAntigravityRemotePools'
+import { getRemotePoolHighlightClasses } from '../utils/antigravityRemotePools'
 import { useRememberMfaQuery } from '../hooks/useRememberMfaQuery'
 import {
   getMfaOtpToken,
@@ -197,6 +199,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     updateAccountNotes
   } = useAccountStore()
   const currentAccount = currentAccountsByTarget[antigravityRuntimeTarget] ?? null
+  const remotePoolUsageMap = useAntigravityRemotePools()
 
   const formatSwitchError = useCallback((error: unknown) => String(error), [])
 
@@ -3038,6 +3041,8 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   const renderGridCards = (items: Account[], groupKey?: string) =>
     items.map((account) => {
       const isCurrent = currentAccount?.id === account.id
+      const remotePoolBadges = remotePoolUsageMap[account.id] ?? []
+      const remotePoolHighlightClass = getRemotePoolHighlightClasses(remotePoolBadges)
       const tierBadge = getAntigravityTierBadge(account.quota)
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isDisabled = account.disabled
@@ -3074,7 +3079,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       return (
         <div
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`account-card ${isCurrent ? 'current' : ''} ${isDisabled ? 'disabled' : ''} ${isSelected ? 'selected' : ''}`}
+          className={`account-card ${isCurrent ? 'current' : ''} ${remotePoolHighlightClass} ${isDisabled ? 'disabled' : ''} ${isSelected ? 'selected' : ''}`}
         >
           <div className="card-top">
             <div className="card-select">
@@ -3092,6 +3097,19 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 {t('accounts.status.current')}
               </span>
             )}
+            {remotePoolBadges.map((remote) => (
+              <span
+                key={remote.serverId}
+                className={`remote-pool-tag remote-pool-color-${remote.colorIndex}`}
+                title={t('accounts.status.remotePoolTooltip', {
+                  server: remote.serverName,
+                  host: remote.host,
+                  defaultValue: 'Remote pool: {{server}} ({{host}})',
+                })}
+              >
+                {remote.serverName}
+              </span>
+            ))}
             {warning && (
               <span className="status-pill warning" title={warningTitle}>
                 <CircleAlert size={12} />
@@ -3428,6 +3446,11 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
     const renderCompactCards = (items: Account[]) =>
       items.map((account) => {
         const isCurrent = currentAccount?.id === account.id
+        const remotePoolBadges = remotePoolUsageMap[account.id] ?? []
+        const compactRemotePoolClass =
+          remotePoolBadges.length > 0
+            ? `${styles.cardRemotePool} ${styles[`cardRemotePoolColor${remotePoolBadges[0].colorIndex}`] ?? ''}`
+            : ''
         const tierBadge = getAntigravityTierBadge(account.quota)
         const quotas = getAccountQuotas(account)
         const overallQuota = calculateOverallQuota(quotas)
@@ -3481,7 +3504,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
         return (
           <div
             key={account.id}
-            className={`${styles.card} ${isCurrent ? styles.cardCurrent : ''} ${isSelected ? styles.cardSelected : ''} ${isSwitching ? styles.cardSwitching : ''}`}
+            className={`${styles.card} ${isCurrent ? styles.cardCurrent : ''} ${compactRemotePoolClass} ${isSelected ? styles.cardSelected : ''} ${isSwitching ? styles.cardSwitching : ''}`}
             onClick={() => {
               if (!switching) toggleSelect(account.id)
             }}
@@ -3509,6 +3532,19 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                 {maskAccountText(account.email)}
               </span>
             </span>
+            {remotePoolBadges.map((remote) => (
+              <span
+                key={remote.serverId}
+                className={`${styles.remotePoolTag} ${styles[`remotePoolColor${remote.colorIndex}`] ?? ''}`}
+                title={t('accounts.status.remotePoolTooltip', {
+                  server: remote.serverName,
+                  host: remote.host,
+                  defaultValue: 'Remote pool: {{server}} ({{host}})',
+                })}
+              >
+                {remote.serverName}
+              </span>
+            ))}
             <div className={styles.quotas}>
               {groupQuotas.length > 0 ? (
                 groupQuotas.map((gq) => (
@@ -3706,6 +3742,8 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
   const renderListRows = (items: Account[], groupKey?: string) =>
     items.map((account) => {
       const isCurrent = currentAccount?.id === account.id
+      const remotePoolBadges = remotePoolUsageMap[account.id] ?? []
+      const remotePoolHighlightClass = getRemotePoolHighlightClasses(remotePoolBadges)
       const tierBadge = getAntigravityTierBadge(account.quota)
       const availableCreditsDisplay = getAvailableAICreditsDisplay(account)
       const isForbidden = Boolean(account.quota?.is_forbidden)
@@ -3727,7 +3765,7 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
       return (
         <tr
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={isCurrent ? 'current' : ''}
+          className={[isCurrent ? 'current' : '', remotePoolHighlightClass].filter(Boolean).join(' ')}
         >
           <td>
             <input
@@ -3747,6 +3785,19 @@ export function useAccountsPageController({ onNavigate }: AccountsPageProps) {
                     {t('accounts.status.current')}
                   </span>
                 )}
+                {remotePoolBadges.map((remote) => (
+                  <span
+                    key={remote.serverId}
+                    className={`mini-tag remote-pool remote-pool-color-${remote.colorIndex}`}
+                    title={t('accounts.status.remotePoolTooltip', {
+                      server: remote.serverName,
+                      host: remote.host,
+                      defaultValue: 'Remote pool: {{server}} ({{host}})',
+                    })}
+                  >
+                    {remote.serverName}
+                  </span>
+                ))}
                 {isPendingAntigravityAccount(account) && (
                   <span className="status-pill warning">{t('codex.pendingAuth.badge', '待授权')}</span>
                 )}

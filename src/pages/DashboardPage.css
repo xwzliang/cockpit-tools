@@ -370,6 +370,21 @@
   box-shadow: 0 4px 12px rgba(29, 78, 216, 0.08);
 }
 
+.dashboard-account-list-item.remote-pool-active:not(.current) > .account-mini-card {
+  border-color: var(--remote-pool-accent);
+  box-shadow: 0 0 0 1px var(--remote-pool-ring), 0 4px 12px var(--remote-pool-bg);
+}
+
+.dashboard-account-list-item.current.remote-pool-active > .account-mini-card {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-light), 0 0 0 4px var(--remote-pool-ring);
+}
+
+.dashboard-account-list-item .remote-pool-tag {
+  padding: 1px 7px;
+  font-size: 10px;
+}
+
 .main-card-collapsible .dashboard-account-list {
   max-height: 2000px;
   opacity: 1;
