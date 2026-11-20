@@ -40,8 +40,10 @@ export function CodexSshSyncModal({ open, onClose, platform = "codex" }: CodexSs
               </h2>
               <p className="codex-ssh-sync-modal__subtitle">
                 {t(
-                  'codex.ssh.modalHint',
-                  '为需要同步的每台 SSH 主机开启「切号后自动同步」。所有开启的主机都会接收当前账号。',
+                  platform === 'antigravity' ? 'antigravity.ssh.modalPolicyHint' : 'codex.ssh.modalHint',
+                  platform === 'antigravity'
+                    ? 'Choose whether each remote host follows the local account or rotates independently. Exclude accounts to reserve them for another machine.'
+                    : '为需要同步的每台 SSH 主机开启「切号后自动同步」。所有开启的主机都会接收当前账号。',
                 )}
               </p>
             </div>

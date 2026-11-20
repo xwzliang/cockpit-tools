@@ -2338,6 +2338,22 @@
       "deleteConfirmTitle": "Delete Interrupted Task",
       "deleteConfirmMessage": "Are you sure you want to remove this task from the interrupted list? It will no longer be tracked or shown.",
       "deleteSuccess": "Task removed from list"
+    },
+    "ssh": {
+      "accountPolicy": "Antigravity accounts on this remote machine",
+      "followLocal": "Follow the local account",
+      "independent": "Independent account pool",
+      "policyHint": "Excluded accounts are never sent to this host. Independent mode keeps its own account and rotates after quota refreshes when automatic sync is enabled. The local account stays unchanged. Enable periodic quota refresh to keep remote rotation running.",
+      "remoteThreshold": "Switch when remote quota reaches (%)",
+      "excludedAccounts": "Exclude accounts from this host",
+      "noAccounts": "Add Antigravity accounts first.",
+      "emptyPoolHint": "If no allowed account has enough quota, the remote account is left unchanged. Use the local auto-switch account scope separately to reserve premium accounts for this machine.",
+      "automaticSync": "Automatic Antigravity sync / remote rotation",
+      "automaticSyncHint": "Follow-local mode syncs local switches to the selected host. Independent mode rotates this host within its allowed accounts after quota checks.",
+      "syncPolicyAccount": "Sync an Antigravity account using this host’s saved policy",
+      "modalPolicyHint": "Choose whether each remote host follows the local account or rotates independently. Exclude accounts to reserve them for another machine.",
+      "syncSwitch": "Automatic SSH sync / remote rotation",
+      "syncSwitchDesc": "Configure a remote host to follow local switches or rotate independently within its allowed Antigravity accounts."
     }
   },
   "codexQueue": {

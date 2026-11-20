@@ -1477,6 +1477,23 @@ fn can_be_auto_switch_candidate(
     true
 }
 
+/// Remote pools evaluate both quota pools independently of local switching settings.
+pub(crate) fn is_remote_auto_switch_candidate(account: &Account, threshold: i32) -> bool {
+    account.quota_error.is_none()
+        && account
+            .quota
+            .as_ref()
+            .is_some_and(|quota| !quota.quota_summary_stale)
+        && can_be_auto_switch_candidate(
+            account,
+            "",
+            threshold,
+            &default_auto_switch_groups(),
+            false,
+            0,
+        )
+}
+
 fn can_be_quota_alert_candidate(account: &Account, current_id: &str) -> bool {
     if account.id == current_id || account.disabled {
         return false;
@@ -1504,7 +1521,7 @@ fn average_quota_percentage(account: &Account) -> f64 {
     sum as f64 / quota.models.len() as f64
 }
 
-fn compare_auto_switch_candidates(a: &Account, b: &Account) -> std::cmp::Ordering {
+pub(crate) fn compare_auto_switch_candidates(a: &Account, b: &Account) -> std::cmp::Ordering {
     let avg_a = average_quota_percentage(a);
     let avg_b = average_quota_percentage(b);
     let credits_a = available_ai_credits(a).unwrap_or(-1.0);
@@ -1935,6 +1952,9 @@ pub async fn run_auto_switch_if_needed() -> Result<Option<Account>, String> {
     }
 
     let result = run_auto_switch_if_needed_inner().await;
+    if let Err(error) = modules::ssh_server::run_remote_antigravity_auto_switch().await {
+        modules::logger::log_warn(&format!("[Antigravity SSH] Remote quota check failed: {error}"));
+    }
     AUTO_SWITCH_IN_PROGRESS.store(false, Ordering::SeqCst);
     result
 }

@@ -12,8 +12,11 @@ import {
   X,
 } from 'lucide-react';
 import { listSshConfigHosts } from '../../services/sshServerService';
+import { useAccountStore } from '../../stores/useAccountStore';
 import { useSshServerStore } from '../../stores/useSshServerStore';
 import type {
+  AntigravitySshAccountPolicy,
+  SshAntigravitySyncResult,
   SshAuthConfig,
   SshCodexSyncResult,
   SshServer,
@@ -32,6 +35,7 @@ interface FormState {
   privateKeyPath: string;
   syncOnSwitch: boolean;
   syncOnAntigravitySwitch: boolean;
+  antigravityAccountPolicy: AntigravitySshAccountPolicy;
 }
 
 const emptyForm: FormState = {
@@ -45,6 +49,7 @@ const emptyForm: FormState = {
   privateKeyPath: '',
   syncOnSwitch: true,
   syncOnAntigravitySwitch: false,
+  antigravityAccountPolicy: { mode: 'follow_local', excluded_account_ids: [], quota_threshold: 20 },
 };
 
 function formFromServer(server: SshServer): FormState {
@@ -60,6 +65,7 @@ function formFromServer(server: SshServer): FormState {
     privateKeyPath: server.auth.kind === 'private_key_file' ? server.auth.path : '',
     syncOnSwitch: server.sync_on_codex_switch,
     syncOnAntigravitySwitch: server.sync_on_antigravity_switch ?? false,
+    antigravityAccountPolicy: server.antigravity_account_policy ?? emptyForm.antigravityAccountPolicy,
   };
 }
 
@@ -79,6 +85,7 @@ function draftFromForm(form: FormState): SshServerDraft {
     auth,
     sync_on_codex_switch: form.syncOnSwitch,
     sync_on_antigravity_switch: form.syncOnAntigravitySwitch,
+    antigravity_account_policy: form.antigravityAccountPolicy,
   };
 }
 
@@ -95,6 +102,15 @@ interface CodexSshServersPanelProps {
 
 export function CodexSshServersPanel({ embedded = false, platform = "codex" }: CodexSshServersPanelProps) {
   const { t } = useTranslation();
+  const accounts = useAccountStore((state) => state.accounts);
+  const fetchAccounts = useAccountStore((state) => state.fetchAccounts);
+  useEffect(() => { void fetchAccounts(); }, [fetchAccounts]);
+  useEffect(() => {
+    const unlisten = listen<SshAntigravitySyncResult>('antigravity:ssh-sync-result', (event) => {
+      useSshServerStore.getState().applyAntigravitySyncResult(event.payload);
+    });
+    return () => { void unlisten.then((dispose) => dispose()); };
+  }, []);
   const {
     servers,
     selectedServerId: codexSelectedId,
@@ -501,13 +517,52 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
               </span>
             </label>
 
+            <fieldset className="codex-ssh-panel__field">
+              <legend>{t('antigravity.ssh.accountPolicy', 'Antigravity accounts on this remote machine')}</legend>
+              <select className="form-input" value={form.antigravityAccountPolicy.mode}
+                onChange={(event) => setForm({ ...form, antigravityAccountPolicy: {
+                  ...form.antigravityAccountPolicy,
+                  mode: event.target.value as AntigravitySshAccountPolicy['mode'],
+                } })}>
+                <option value="follow_local">{t('antigravity.ssh.followLocal', 'Follow the local account')}</option>
+                <option value="independent">{t('antigravity.ssh.independent', 'Independent account pool')}</option>
+              </select>
+              <small>{t('antigravity.ssh.policyHint', 'Excluded accounts are never sent to this host. Independent mode keeps its own account and rotates after quota refreshes when automatic sync is enabled. The local account stays unchanged. Enable periodic quota refresh to keep remote rotation running.')}</small>
+              {form.antigravityAccountPolicy.mode === 'independent' && (
+                <label>
+                  {t('antigravity.ssh.remoteThreshold', 'Switch when remote quota reaches (%)')}
+                  <input className="form-input" type="number" min={0} max={99} required
+                    value={form.antigravityAccountPolicy.quota_threshold}
+                    onChange={(event) => setForm({ ...form, antigravityAccountPolicy: {
+                      ...form.antigravityAccountPolicy, quota_threshold: Number(event.target.value),
+                    } })} />
+                </label>
+              )}
+              <strong>{t('antigravity.ssh.excludedAccounts', 'Exclude accounts from this host')}</strong>
+              {accounts.length === 0 && <small>{t('antigravity.ssh.noAccounts', 'Add Antigravity accounts first.')}</small>}
+              {accounts.map((account) => (
+                <label key={account.id}>
+                  <input type="checkbox"
+                    checked={form.antigravityAccountPolicy.excluded_account_ids.includes(account.id)}
+                    onChange={(event) => setForm({ ...form, antigravityAccountPolicy: {
+                      ...form.antigravityAccountPolicy,
+                      excluded_account_ids: event.target.checked
+                        ? [...form.antigravityAccountPolicy.excluded_account_ids, account.id]
+                        : form.antigravityAccountPolicy.excluded_account_ids.filter((id) => id !== account.id),
+                    } })} />
+                  {account.email}{account.quota?.subscription_tier ? ` · ${account.quota.subscription_tier}` : ''}
+                </label>
+              ))}
+              <small>{t('antigravity.ssh.emptyPoolHint', 'If no allowed account has enough quota, the remote account is left unchanged. Use the local auto-switch account scope separately to reserve premium accounts for this machine.')}</small>
+            </fieldset>
+
             <label className="codex-ssh-panel__switch-card">
               <span className="codex-ssh-panel__switch-copy">
-                <strong>{t('antigravity.ssh.syncOnSwitch', 'Antigravity 切号后自动同步')}</strong>
+                <strong>{t('antigravity.ssh.automaticSync', 'Automatic Antigravity sync / remote rotation')}</strong>
                 <em>
                   {t(
-                    'antigravity.ssh.syncOnSwitchHint',
-                    '保存并选中后，Antigravity 切号会推送鉴权到这台主机',
+                    'antigravity.ssh.automaticSyncHint',
+                    'Follow-local mode syncs local switches to the selected host. Independent mode rotates this host within its allowed accounts after quota checks.',
                   )}
                 </em>
               </span>
@@ -609,6 +664,11 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
                               Codex 同步
                             </span>
                           )}
+                          {server.antigravity_account_policy?.mode === 'independent' && (
+                            <span className="codex-ssh-panel__badge codex-ssh-panel__badge--soft">
+                              {t('antigravity.ssh.independent', 'Independent account pool')}
+                            </span>
+                          )}
                           {server.sync_on_antigravity_switch && (
                             <span className="codex-ssh-panel__badge codex-ssh-panel__badge--soft">
                               Antigravity 同步
@@ -702,7 +762,7 @@ export function CodexSshServersPanel({ embedded = false, platform = "codex" }: C
                       className="btn btn-secondary"
                       type="button"
                       disabled={busy}
-                      title={t('antigravity.ssh.syncAntigravity', '同步当前 Antigravity 账号')}
+                      title={t('antigravity.ssh.syncPolicyAccount', 'Sync an Antigravity account using this host’s saved policy')}
                       onClick={() => void handleSyncAntigravity(server.id)}
                     >
                       <KeyRound size={14} />

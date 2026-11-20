@@ -2376,6 +2376,22 @@
       "deleteConfirmTitle": "删除中断任务",
       "deleteConfirmMessage": "确定要从受限中断列表中删除该任务吗？删除后将不再跟踪和提示此任务。",
       "deleteSuccess": "任务已从列表中移除"
+    },
+    "ssh": {
+      "accountPolicy": "此远程主机的 Antigravity 账号",
+      "followLocal": "跟随本机账号",
+      "independent": "独立账号池",
+      "policyHint": "排除的账号不会同步到此主机。独立模式在开启自动同步后，根据配额刷新结果轮换远程账号，不改变本机账号。请开启定时配额刷新。",
+      "remoteThreshold": "远程剩余配额切换阈值（%）",
+      "excludedAccounts": "从此主机排除账号",
+      "noAccounts": "请先添加 Antigravity 账号。",
+      "emptyPoolHint": "没有可用账号或配额不足时，保留远程账号不变。本机自动切换的账号范围需单独设置，可将高订阅账号保留给本机。",
+      "automaticSync": "Antigravity 自动同步 / 远程轮换",
+      "automaticSyncHint": "跟随模式将本机切号同步到选中的主机。独立模式在配额检查后，在此主机的可用账号中轮换。",
+      "syncPolicyAccount": "按此主机保存的策略同步 Antigravity 账号",
+      "modalPolicyHint": "选择每台远程主机跟随本机账号或独立轮换。排除账号可将其保留给其他机器。",
+      "syncSwitch": "SSH 自动同步 / 远程轮换",
+      "syncSwitchDesc": "配置远程主机跟随本机切号，或在允许的 Antigravity 账号中独立轮换。"
     }
   },
   "codexQueue": {

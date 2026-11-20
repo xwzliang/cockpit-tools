@@ -28,6 +28,22 @@ fn default_false() -> bool {
     false
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AntigravitySshAccountMode {
+    #[default]
+    FollowLocal,
+    Independent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AntigravitySshAccountPolicy {
+    pub mode: AntigravitySshAccountMode,
+    #[serde(default)]
+    pub excluded_account_ids: Vec<String>,
+    pub quota_threshold: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshServer {
     pub id: String,
@@ -42,6 +58,8 @@ pub struct SshServer {
     pub sync_on_codex_switch: bool,
     #[serde(default = "default_false")]
     pub sync_on_antigravity_switch: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antigravity_account_policy: Option<AntigravitySshAccountPolicy>,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_sync: Option<SshCodexSyncStatus>,

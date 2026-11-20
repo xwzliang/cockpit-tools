@@ -441,6 +441,27 @@ Due to macOS security mechanisms, apps not downloaded from the App Store may tri
 
 ---
 
+### Independent Antigravity accounts over SSH
+
+In Antigravity settings, open **SSH sync**, edit the remote host, and choose
+**Independent account pool**. Exclude any accounts reserved for the local machine
+(for example, the Mac mini's premium subscription), set the remote quota threshold,
+enable **Automatic Antigravity sync / remote rotation**, and save. **Sync Antigravity**
+applies that host's saved policy without changing the local account.
+
+Keep periodic quota refresh enabled in Cockpit. After quota checks, each enabled
+independent host keeps its last successfully synced account while both quota pools
+remain above its threshold, then selects an eligible non-excluded account.
+The remote pool does not depend on the local automatic-switch toggle or account scope.
+Configure the local automatic-switch account scope separately to keep the Mac mini
+on premium accounts. Cockpit must remain running and able to reach the remote host.
+
+Exclusions also apply to manual sync and follow-local sync. If all allowed accounts
+are unavailable or below threshold, no account is sent; there is no fallback to an
+excluded account. The existing remote account remains in place until a usable account
+is available. Remote account tracking uses the last verified Cockpit SSH sync;
+account changes made directly on the remote machine are not detected.
+
 ## Development & Build
 
 ### Prerequisites

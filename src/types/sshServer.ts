@@ -1,3 +1,9 @@
+export interface AntigravitySshAccountPolicy {
+  mode: 'follow_local' | 'independent';
+  excluded_account_ids: string[];
+  quota_threshold: number;
+}
+
 export type SshAuthConfig =
   | { kind: 'agent' }
   | { kind: 'ssh_config' }
@@ -43,6 +49,7 @@ export interface SshServer {
   auth: SshAuthConfig;
   sync_on_codex_switch: boolean;
   sync_on_antigravity_switch: boolean;
+  antigravity_account_policy?: AntigravitySshAccountPolicy;
   created_at: number;
   updated_at: number;
   last_sync: SshCodexSyncStatus | null;
@@ -66,4 +73,5 @@ export interface SshServerDraft {
   auth: SshAuthConfig;
   sync_on_codex_switch?: boolean;
   sync_on_antigravity_switch?: boolean;
+  antigravity_account_policy?: AntigravitySshAccountPolicy;
 }

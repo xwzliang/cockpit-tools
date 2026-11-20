@@ -19,6 +19,7 @@ function toServer(draft: SshServerDraft): SshServer {
     auth: draft.auth,
     sync_on_codex_switch: draft.sync_on_codex_switch ?? true,
     sync_on_antigravity_switch: draft.sync_on_antigravity_switch ?? false,
+    antigravity_account_policy: draft.antigravity_account_policy,
     created_at: 0,
     updated_at: 0,
     last_sync: null,

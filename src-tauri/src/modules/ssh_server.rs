@@ -1,6 +1,6 @@
 use crate::models::codex::CodexAccount;
 use crate::models::ssh_server::{
-    SshAntigravitySyncResult, SshAntigravitySyncStatus, SshAuthConfig, SshCodexSyncResult,
+    AntigravitySshAccountMode, SshAntigravitySyncResult, SshAntigravitySyncStatus, SshAuthConfig, SshCodexSyncResult,
     SshCodexSyncStatus, SshServer, SshServerStore,
 };
 use crate::models::Account;
@@ -280,11 +280,19 @@ fn normalize_server(
     }
     server.updated_at = now;
     if let Some(existing) = existing {
+        if server.antigravity_account_policy.is_none() {
+            server.antigravity_account_policy = existing.antigravity_account_policy.clone();
+        }
         if server.last_sync.is_none() {
             server.last_sync = existing.last_sync.clone();
         }
         if server.last_antigravity_sync.is_none() {
             server.last_antigravity_sync = existing.last_antigravity_sync.clone();
+        }
+    }
+    if let Some(policy) = &server.antigravity_account_policy {
+        if !(0..=99).contains(&policy.quota_threshold) {
+            return Err("Remote quota threshold must be between 0 and 99".into());
         }
     }
     validate_server(&server)?;
@@ -1522,7 +1530,11 @@ async fn sync_antigravity_account_to_server(
     let synced_at = now_timestamp();
     let sync_attempt = async {
         validate_server(&server)?;
-        let bundle = build_antigravity_projection_bundle(account)
+        if !antigravity_account_allowed(&server, account) {
+            return Err("Account is excluded from this remote machine".to_string());
+        }
+        let prepared = account::prepare_account_for_injection(&account.id).await?;
+        let bundle = build_antigravity_projection_bundle(&prepared)
             .map_err(|e| format!("antigravity_bundle_failed: {}", sanitize_error(e)))?;
         upload_and_verify_antigravity_bundle(&server, &bundle).await?;
         reload_remote_antigravity_server(&server).await?;
@@ -1564,8 +1576,7 @@ async fn sync_antigravity_account_to_server(
 pub async fn sync_current_antigravity_account_to_server(
     server_id: Option<String>,
 ) -> Result<SshAntigravitySyncResult, String> {
-    let account = account::get_current_account()?
-        .ok_or_else(|| "antigravity_sync_failed: no current Antigravity account".to_string())?;
+    let _guard = ANTIGRAVITY_SYNC_LOCK.lock().await;
     let store = load_store()?;
     let server = if let Some(server_id) = server_id
         .as_deref()
@@ -1582,12 +1593,25 @@ pub async fn sync_current_antigravity_account_to_server(
         store.selected_antigravity_server_id.as_ref().and_then(|id| store.servers.iter().find(|s| &s.id == id)).cloned()
             .ok_or_else(|| "ssh_not_configured: no selected SSH server".to_string())?
     };
+    let account = if independent_antigravity(&server) {
+        let accounts = account::list_accounts()?;
+        select_remote_antigravity_account(&server, &accounts)
+            .cloned()
+            .ok_or_else(|| "No eligible Antigravity account in this remote pool".to_string())?
+    } else {
+        account::get_current_account()?
+            .ok_or_else(|| "No current Antigravity account".to_string())?
+    };
+    if !antigravity_account_allowed(&server, &account) {
+        return Err("Account is excluded from this remote machine".into());
+    }
     Ok(sync_antigravity_account_to_server(server, &account).await)
 }
 
 pub async fn sync_selected_server_after_antigravity_switch(
     account: &Account,
 ) -> Option<SshAntigravitySyncResult> {
+    let _guard = ANTIGRAVITY_SYNC_LOCK.lock().await;
     let store = match load_store() {
         Ok(store) => store,
         Err(error) => {
@@ -1596,10 +1620,65 @@ pub async fn sync_selected_server_after_antigravity_switch(
         }
     };
     let server = store.selected_antigravity_server_id.as_ref().and_then(|id| store.servers.iter().find(|s| &s.id == id)).cloned()?;
-    if !server.sync_on_antigravity_switch {
+    if !server.sync_on_antigravity_switch || independent_antigravity(&server)
+        || !antigravity_account_allowed(&server, account) {
         return None;
     }
     Some(sync_antigravity_account_to_server(server, account).await)
+}
+
+// Serialize remote projections so refreshes and manual sync cannot race.
+static ANTIGRAVITY_SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn independent_antigravity(server: &SshServer) -> bool {
+    server.antigravity_account_policy.as_ref().is_some_and(|policy|
+        matches!(policy.mode, AntigravitySshAccountMode::Independent))
+}
+
+fn antigravity_account_allowed(server: &SshServer, account: &Account) -> bool {
+    !account.disabled && !server.antigravity_account_policy.as_ref().is_some_and(|policy|
+        policy.excluded_account_ids.contains(&account.id))
+}
+
+fn select_remote_antigravity_account<'a>(server: &SshServer, accounts: &'a [Account]) -> Option<&'a Account> {
+    let threshold = server.antigravity_account_policy.as_ref()?.quota_threshold;
+    let eligible = |account: &&Account| antigravity_account_allowed(server, account)
+        && account::is_remote_auto_switch_candidate(account, threshold);
+    // Keep the remote account until its quota is low; local account scope is irrelevant.
+    if let Some(current) = server.last_antigravity_sync.as_ref().filter(|status| status.verified) {
+        if let Some(account) = accounts.iter().filter(eligible).find(|a| a.id == current.account_id) {
+            return Some(account);
+        }
+    }
+    accounts.iter().filter(eligible).min_by(|a, b| account::compare_auto_switch_candidates(a, b))
+}
+
+/// Runs on quota checks even when local automatic switching is disabled.
+pub async fn run_remote_antigravity_auto_switch() -> Result<(), String> {
+    let Ok(_guard) = ANTIGRAVITY_SYNC_LOCK.try_lock() else { return Ok(()); };
+    let store = load_store()?;
+    let accounts = account::list_accounts()?;
+    for server in store.servers.iter().filter(|s| s.sync_on_antigravity_switch && independent_antigravity(s)) {
+        if server.last_antigravity_sync.as_ref().is_some_and(|status|
+            !status.verified && now_timestamp() - status.synced_at < 60) {
+            continue;
+        }
+        let Some(target) = select_remote_antigravity_account(server, &accounts) else { continue; };
+        if server.last_antigravity_sync.as_ref().is_some_and(|status|
+            status.verified && status.account_id == target.id) {
+            continue;
+        }
+        let result = sync_antigravity_account_to_server(server.clone(), target).await;
+        if let Some(app) = crate::get_app_handle() {
+            use tauri::Emitter;
+            let _ = app.emit("antigravity:ssh-sync-result", &result);
+        }
+        if !result.verified {
+            logger::log_warn(&format!("[Antigravity SSH] Remote auto switch failed: {}",
+                result.error.unwrap_or_default()));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1645,11 +1724,93 @@ mod tests {
             auth: SshAuthConfig::Agent,
             sync_on_codex_switch: true,
             sync_on_antigravity_switch: false,
+            antigravity_account_policy: None,
             created_at: 1,
             updated_at: 1,
             last_sync: None,
             last_antigravity_sync: None,
         }
+    }
+
+    fn remote_account(id: &str, percentage: i32) -> Account {
+        let token = crate::models::token::TokenData::new(
+            "test".into(), "test".into(), 3600, None, None, None);
+        let mut account = Account::new(id.into(), format!("{id}@example.test"), token);
+        let mut quota = crate::models::QuotaData::new();
+        for name in ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"] {
+            quota.models.push(crate::models::quota::ModelQuota {
+                name: name.into(), display_name: None, percentage, reset_time: String::new(),
+            });
+        }
+        account.quota = Some(quota);
+        account
+    }
+
+    fn independent_server() -> SshServer {
+        let mut server = valid_server();
+        server.antigravity_account_policy = Some(crate::models::ssh_server::AntigravitySshAccountPolicy {
+            mode: AntigravitySshAccountMode::Independent,
+            excluded_account_ids: vec!["premium".into()],
+            quota_threshold: 20,
+        });
+        server
+    }
+
+    #[test]
+    fn remote_pool_excludes_premium_and_keeps_healthy_remote_account() {
+        let mut server = independent_server();
+        let accounts = vec![remote_account("premium", 100), remote_account("cheap", 50),
+            remote_account("backup", 80)];
+        assert!(!antigravity_account_allowed(&server, &accounts[0]));
+        assert_eq!(select_remote_antigravity_account(&server, &accounts).unwrap().id, "backup");
+        server.last_antigravity_sync = Some(SshAntigravitySyncStatus {
+            account_id: "cheap".into(), account_email: "cheap@example.test".into(),
+            bundle_hash: "hash".into(), synced_at: 1, verified: true, error: None,
+        });
+        assert_eq!(select_remote_antigravity_account(&server, &accounts).unwrap().id, "cheap");
+        let mut depleted = accounts.clone();
+        depleted[1].quota.as_mut().unwrap().models[0].percentage = 20;
+        assert_eq!(select_remote_antigravity_account(&server, &depleted).unwrap().id, "backup");
+        depleted[2].disabled = true;
+        assert!(select_remote_antigravity_account(&server, &depleted).is_none());
+    }
+
+    #[test]
+    fn remote_pool_never_falls_back_to_excluded_or_unknown_quota_accounts() {
+        let server = independent_server();
+        let mut unknown = remote_account("unknown", 100);
+        unknown.quota = None;
+        assert!(select_remote_antigravity_account(&server, &[remote_account("premium", 100), unknown]).is_none());
+        let mut forbidden = remote_account("forbidden", 100);
+        forbidden.quota.as_mut().unwrap().is_forbidden = true;
+        assert!(select_remote_antigravity_account(&server, &[forbidden]).is_none());
+        let mut stale = remote_account("stale", 100);
+        stale.quota.as_mut().unwrap().quota_summary_stale = true;
+        assert!(select_remote_antigravity_account(&server, &[stale]).is_none());
+        let mut follow = server.clone();
+        follow.antigravity_account_policy.as_mut().unwrap().mode = AntigravitySshAccountMode::FollowLocal;
+        assert!(!independent_antigravity(&follow));
+        assert!(!antigravity_account_allowed(&follow, &remote_account("premium", 100)));
+        let mut all_excluded = server.clone();
+        all_excluded.antigravity_account_policy.as_mut().unwrap().excluded_account_ids.push("cheap".into());
+        assert!(select_remote_antigravity_account(&all_excluded, &[remote_account("cheap", 100)]).is_none());
+    }
+
+    #[test]
+    fn remote_policy_survives_toggle_updates_and_legacy_stores() {
+        let existing = independent_server();
+        let updated = normalize_server(valid_server(), Some(&existing)).unwrap();
+        assert!(independent_antigravity(&updated));
+        assert_eq!(updated.antigravity_account_policy.unwrap().excluded_account_ids, vec!["premium"]);
+        let legacy = serde_json::to_value(valid_server()).unwrap();
+        assert!(legacy.get("antigravity_account_policy").is_none());
+        let restored: SshServer = serde_json::from_value(legacy).unwrap();
+        assert!(!independent_antigravity(&restored));
+        let roundtrip: SshServer = serde_json::from_str(&serde_json::to_string(&existing).unwrap()).unwrap();
+        assert!(independent_antigravity(&roundtrip));
+        let mut invalid = existing;
+        invalid.antigravity_account_policy.as_mut().unwrap().quota_threshold = 100;
+        assert!(normalize_server(invalid, None).is_err());
     }
 
     #[test]
@@ -1997,6 +2158,7 @@ compile(writers[0], 'generated-keychain-writer.py', 'exec')
             auth: SshAuthConfig::Agent,
             sync_on_codex_switch: true,
             sync_on_antigravity_switch: false,
+            antigravity_account_policy: None,
             created_at: now,
             updated_at: now,
             last_sync: None,
